@@ -23,6 +23,8 @@ https://tsgzw1.qdhhc.edu.cn/mobile.html#/ic/reserveList
 
 ## 运行
 
+### 本地运行
+
 ```bash
 npm install
 npm run install-browsers
@@ -34,6 +36,65 @@ npm start
 ```text
 http://localhost:3000
 ```
+
+### Docker 部署
+
+服务器推荐使用 Docker 部署。镜像基于 Playwright 官方镜像，已经包含 Chromium 和运行依赖。
+
+```bash
+git clone https://github.com/WanchaDJ/book.git
+cd book
+docker compose up -d --build
+```
+
+打开：
+
+```text
+http://服务器IP:3000
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+### 普通 Node 部署
+
+如果不使用 Docker，需要服务器已安装 Node.js 20+，并安装 Playwright 的 Chromium 及系统依赖。
+
+```bash
+git clone https://github.com/WanchaDJ/book.git
+cd book
+npm ci --omit=dev
+npx playwright install --with-deps chromium
+FORCE_HEADLESS=true TZ=Asia/Shanghai npm start
+```
+
+可以用 PM2 常驻运行：
+
+```bash
+npm install -g pm2
+FORCE_HEADLESS=true TZ=Asia/Shanghai pm2 start server.js --name library-seat-reserver
+pm2 save
+```
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `3000` | 网站监听端口 |
+| `NODE_ENV` | `development` | Docker 中为 `production` |
+| `FORCE_HEADLESS` | `false` | 设为 `true` 后强制无头浏览器运行，服务器部署必须开启 |
+| `TZ` | 系统时区 | 建议设为 `Asia/Shanghai`，保证每日定时按北京时间计算 |
+
+服务器部署时请保持 `FORCE_HEADLESS=true`。此时页面中的“执行时显示浏览器窗口”选项会被忽略，预约流程会使用无头 Chromium 运行。
 
 ## 使用方式
 
@@ -65,5 +126,6 @@ http://localhost:3000
 
 - 密码只保存在当前 Node 进程内，页面不会自动清空密码输入框，方便继续检查座位或创建新任务。
 - 不要把真实账号、密码、Cookie 或 token 提交到仓库。
+- 服务器部署时建议只绑定可信网络，或在 Nginx / 宝塔 / 反向代理层增加访问密码，不要把页面裸露到公网。
 - 本项目不做验证码识别、滑块绕过、接口绕过或高频重试。
 - 本项目是本地辅助工具，最终预约结果请以官网预约记录为准。

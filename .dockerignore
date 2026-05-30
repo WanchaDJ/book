@@ -1,7 +1,8 @@
 node_modules/
+.git/
 .site-scan/
 site-check.png
 *.log
 .env
 .env.*
-!.env.example
+README.local.md

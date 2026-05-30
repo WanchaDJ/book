@@ -7,6 +7,10 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const tasks = new Map();
 const bus = new EventEmitter();
+const serverMode = {
+  nodeEnv: process.env.NODE_ENV || "development",
+  forceHeadless: /^(1|true|yes|on)$/i.test(String(process.env.FORCE_HEADLESS || "")),
+};
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
@@ -208,7 +212,7 @@ async function executeTask(task, runAt = new Date()) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, target: TARGET.baseUrl, time: new Date().toISOString() });
+  res.json({ ok: true, target: TARGET.baseUrl, mode: serverMode, time: new Date().toISOString() });
 });
 
 app.get("/api/seat-menu", async (_req, res) => {

@@ -1,0 +1,13 @@
+services:
+  library-seat-reserver:
+    build: .
+    image: library-seat-reserver:latest
+    container_name: library-seat-reserver
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      FORCE_HEADLESS: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "3000:3000"

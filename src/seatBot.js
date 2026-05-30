@@ -9,6 +9,16 @@ export const TARGET = {
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36";
 
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
+
+function shouldRunHeadless(form) {
+  if (isTruthyEnv(process.env.FORCE_HEADLESS)) return true;
+  if (process.env.NODE_ENV === "production") return true;
+  return !form.visibleBrowser;
+}
+
 export async function fetchSeatMenu() {
   const response = await fetch(`${TARGET.apiBase}/seatMenu`, {
     headers: { accept: "application/json" },
@@ -486,8 +496,9 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
 }
 
 export async function runSeatTask(form, log) {
+  const headless = shouldRunHeadless(form);
   const browser = await chromium.launch({
-    headless: !form.visibleBrowser,
+    headless,
     args: ["--disable-blink-features=AutomationControlled"],
   });
   const context = await browser.newContext({
@@ -515,7 +526,7 @@ export async function runSeatTask(form, log) {
       results,
     };
   } finally {
-    if (form.visibleBrowser) {
+    if (!headless) {
       log("info", "浏览器保持打开 20 秒，方便查看结果");
       await page.waitForTimeout(20000).catch(() => {});
     }
@@ -524,8 +535,9 @@ export async function runSeatTask(form, log) {
 }
 
 export async function previewSeatMatch(form, log) {
+  const headless = shouldRunHeadless(form);
   const browser = await chromium.launch({
-    headless: !form.visibleBrowser,
+    headless,
     args: ["--disable-blink-features=AutomationControlled"],
   });
   const context = await browser.newContext({
@@ -569,7 +581,7 @@ export async function previewSeatMatch(form, log) {
       message: `匹配到 ${matches.length} 个候选座位；优先使用 ${seatNo}：${room.label} / ${seatLabel(device)}，devId=${device.devId ?? device.deviceId}，字段 ${matchInfo.field}=${matchInfo.value}`,
     };
   } finally {
-    if (form.visibleBrowser) {
+    if (!headless) {
       log("info", "匹配检查完成，浏览器保持打开 8 秒");
       await page.waitForTimeout(8000).catch(() => {});
     }
