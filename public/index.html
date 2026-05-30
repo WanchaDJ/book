@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>图书馆座位预约助手</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel control-panel">
+        <div class="masthead">
+          <div>
+            <p class="eyebrow">QDHHC Library</p>
+            <h1>座位预约助手</h1>
+          </div>
+          <div class="clock" id="clock">--:--:--</div>
+        </div>
+
+        <form id="taskForm" class="form-grid">
+          <div class="field span-2">
+            <label for="account">账号</label>
+            <input id="account" name="account" autocomplete="username" required placeholder="学号 / 工号" />
+          </div>
+          <div class="field span-2">
+            <label for="password">密码</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="统一身份认证密码" />
+          </div>
+
+          <div class="field span-2">
+            <label for="startTime">开始抢座时间</label>
+            <input id="startTime" name="startTime" type="time" required step="60" />
+          </div>
+          <div class="field">
+            <label for="seatNo">座位号</label>
+            <input id="seatNo" name="seatNo" required placeholder="例如 036" />
+          </div>
+          <div class="field">
+            <label for="roomId">阅览区</label>
+            <select id="roomId" name="roomId">
+              <option value="">自动识别</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="seatNoAlt1">备选座位 1</label>
+            <input id="seatNoAlt1" name="seatNoAlt1" placeholder="主座位失败后尝试" />
+          </div>
+          <div class="field">
+            <label for="seatNoAlt2">备选座位 2</label>
+            <input id="seatNoAlt2" name="seatNoAlt2" placeholder="备选 1 失败后尝试" />
+          </div>
+
+          <div class="field span-2">
+            <label>执行方式</label>
+            <div class="segmented" role="radiogroup" aria-label="执行方式">
+              <label><input type="radio" name="mode" value="browser" checked /> 登录后读取座位图提交</label>
+            </div>
+          </div>
+          <label class="checkline span-2">
+            <input id="visibleBrowser" type="checkbox" checked />
+            <span>执行时显示浏览器窗口，便于处理登录状态和人工确认</span>
+          </label>
+
+          <div class="segments span-2">
+            <div class="section-head">
+              <div>
+                <h2>预约时间段</h2>
+                <p>每段最长 3 小时；日期默认填为下一次开始抢座日期的第二天，可手动修改。</p>
+              </div>
+              <button type="button" class="ghost" id="addSegment">添加时间段</button>
+            </div>
+            <div id="segments"></div>
+          </div>
+
+          <div class="actions span-2">
+            <button type="submit" class="primary">创建定时任务</button>
+            <button type="button" class="secondary" id="previewSeat">检查座位匹配</button>
+            <button type="button" class="secondary" id="refreshMenu">刷新阅览区</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel status-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Runtime</p>
+            <h2>任务与日志</h2>
+          </div>
+          <span class="pill" id="serverStatus">连接中</span>
+        </div>
+        <div class="task-list" id="taskList"></div>
+        <div class="log-box" id="logBox"></div>
+      </section>
+    </main>
+
+    <template id="segmentTemplate">
+      <div class="segment-row">
+        <div class="field">
+          <label>日期</label>
+          <input class="seg-date" type="date" required />
+        </div>
+        <div class="field">
+          <label>开始</label>
+          <input class="seg-begin" type="time" required step="60" />
+        </div>
+        <div class="field">
+          <label>结束</label>
+          <input class="seg-end" type="time" required step="60" />
+        </div>
+        <button type="button" class="icon-btn remove-seg" aria-label="删除时间段">×</button>
+      </div>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
