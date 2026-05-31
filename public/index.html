@@ -42,39 +42,6 @@
           <span id="userInfoText"></span>
           <button type="button" class="ghost" id="logoutButton">退出登录</button>
         </div>
-
-        <div class="admin-box">
-          <div class="section-head compact-head">
-            <div>
-              <h2>账号管理</h2>
-              <p>输入管理员密钥后，可以生成账号、查看初始密码和绑定学号。</p>
-            </div>
-            <span class="pill" id="adminStatus">未解锁</span>
-          </div>
-
-          <form id="adminUnlockForm" class="auth-grid">
-            <div class="field span-2">
-              <label for="adminKey">管理员密钥</label>
-              <input id="adminKey" type="password" autocomplete="off" placeholder="服务器环境变量 ADMIN_KEY" />
-            </div>
-            <button type="submit" class="secondary">解锁</button>
-          </form>
-
-          <div id="adminTools" class="hidden">
-            <form id="createUserForm" class="auth-grid">
-              <div class="field">
-                <label for="newUsername">新账号</label>
-                <input id="newUsername" autocomplete="off" placeholder="字母/数字/下划线" />
-              </div>
-              <div class="field">
-                <label for="newPassword">密码</label>
-                <input id="newPassword" autocomplete="off" placeholder="留空自动生成" />
-              </div>
-              <button type="submit" class="primary">生成账号</button>
-            </form>
-            <div id="managedUsers" class="managed-users"></div>
-          </div>
-        </div>
       </section>
 
       <section class="panel control-panel">

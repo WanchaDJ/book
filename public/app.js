@@ -11,17 +11,11 @@ const userBar = document.querySelector("#userBar");
 const authStatus = document.querySelector("#authStatus");
 const userInfoText = document.querySelector("#userInfoText");
 const logoutButton = document.querySelector("#logoutButton");
-const adminUnlockForm = document.querySelector("#adminUnlockForm");
-const createUserForm = document.querySelector("#createUserForm");
-const adminTools = document.querySelector("#adminTools");
-const adminStatus = document.querySelector("#adminStatus");
-const managedUsersEl = document.querySelector("#managedUsers");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
 let currentUser = null;
 let events = null;
-let adminKey = "";
 
 function pad(value) {
   return String(value).padStart(2, "0");
@@ -119,47 +113,6 @@ function addLog(entry) {
   div.textContent = `[${entry.at || new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${entry.message}`;
   logBox.append(div);
   logBox.scrollTop = logBox.scrollHeight;
-}
-
-function adminHeaders() {
-  return {
-    "Content-Type": "application/json",
-    "x-admin-key": adminKey,
-  };
-}
-
-function renderManagedUsers(users = []) {
-  if (!users.length) {
-    managedUsersEl.innerHTML = `<div class="empty">暂无系统账号</div>`;
-    return;
-  }
-  managedUsersEl.innerHTML = users
-    .map(
-      (user) => `
-        <article class="managed-user" data-username="${user.username}">
-          <strong>${user.username}</strong>
-          <code>${user.initialPassword || "旧账号无记录"}</code>
-          <span>${user.boundStudentId || "未绑定学号"}</span>
-          <button type="button" class="trash-task delete-user" title="删除账号" aria-label="删除账号">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 6h18" />
-              <path d="M8 6V4h8v2" />
-              <path d="M6 6l1 15h10l1-15" />
-              <path d="M10 11v6" />
-              <path d="M14 11v6" />
-            </svg>
-          </button>
-        </article>
-      `,
-    )
-    .join("");
-}
-
-async function loadManagedUsers() {
-  const response = await fetch("/api/admin/users", { headers: { "x-admin-key": adminKey } });
-  const data = await response.json();
-  if (!response.ok || !data.ok) throw new Error(data.message || "读取账号列表失败");
-  renderManagedUsers(data.users || []);
 }
 
 function addSegment(values = {}) {
@@ -505,68 +458,6 @@ async function logout() {
   addLog({ level: "warn", message: "已退出系统账号" });
 }
 
-async function unlockAdmin(event) {
-  event.preventDefault();
-  adminKey = document.querySelector("#adminKey").value;
-  if (!adminKey) {
-    addLog({ level: "error", message: "请输入管理员密钥" });
-    return;
-  }
-  try {
-    await loadManagedUsers();
-    adminTools.classList.remove("hidden");
-    adminStatus.textContent = "已解锁";
-    addLog({ level: "success", message: "账号管理已解锁" });
-  } catch (error) {
-    adminKey = "";
-    adminTools.classList.add("hidden");
-    adminStatus.textContent = "未解锁";
-    addLog({ level: "error", message: error.message });
-  }
-}
-
-async function createManagedUser(event) {
-  event.preventDefault();
-  const payload = {
-    username: document.querySelector("#newUsername").value,
-    password: document.querySelector("#newPassword").value,
-  };
-  try {
-    const response = await fetch("/api/admin/users", {
-      method: "POST",
-      headers: adminHeaders(),
-      body: JSON.stringify(payload),
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.message || "生成账号失败");
-    document.querySelector("#newUsername").value = "";
-    document.querySelector("#newPassword").value = "";
-    addLog({ level: "success", message: `账号已生成：${data.user.username} / ${data.user.initialPassword}` });
-    await loadManagedUsers();
-  } catch (error) {
-    addLog({ level: "error", message: error.message });
-  }
-}
-
-async function handleManagedUserAction(event) {
-  const button = event.target.closest(".delete-user");
-  if (!button) return;
-  const row = button.closest(".managed-user");
-  const username = row.dataset.username;
-  try {
-    const response = await fetch(`/api/admin/users/${encodeURIComponent(username)}`, {
-      method: "DELETE",
-      headers: { "x-admin-key": adminKey },
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.message || "删除账号失败");
-    addLog({ level: "warn", message: `账号已删除：${username}` });
-    await loadManagedUsers();
-  } catch (error) {
-    addLog({ level: "error", message: error.message });
-  }
-}
-
 function tickClock() {
   document.querySelector("#clock").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
 }
@@ -580,9 +471,6 @@ form.addEventListener("submit", createTask);
 loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);
 logoutButton.addEventListener("click", logout);
-adminUnlockForm.addEventListener("submit", unlockAdmin);
-createUserForm.addEventListener("submit", createManagedUser);
-managedUsersEl.addEventListener("click", handleManagedUserAction);
 
 const start = new Date(Date.now() + 5 * 60 * 1000);
 form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;

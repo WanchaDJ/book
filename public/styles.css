@@ -43,6 +43,12 @@ select {
   gap: 24px;
 }
 
+.admin-shell {
+  width: min(1040px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 32px 0;
+}
+
 .panel {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--line);
@@ -56,6 +62,15 @@ select {
 .auth-panel {
   grid-column: span 2;
   padding: 20px 24px;
+}
+
+.admin-login-panel,
+.admin-workspace {
+  padding: 28px;
+}
+
+.admin-workspace {
+  min-height: 680px;
 }
 
 .status-panel {
@@ -134,6 +149,50 @@ h2 {
   align-items: end;
 }
 
+.admin-login-form,
+.admin-create-form {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.admin-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.text-link {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.admin-message {
+  min-height: 22px;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.admin-message.success {
+  color: var(--success);
+}
+
+.admin-message.error {
+  color: var(--danger);
+}
+
 .user-bar {
   margin-top: 14px;
   display: flex;
@@ -160,9 +219,20 @@ h2 {
   gap: 8px;
 }
 
+.managed-users-head {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(130px, 1.1fr) minmax(120px, 1fr) minmax(150px, 1fr) 38px;
+  gap: 10px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .managed-user {
   display: grid;
-  grid-template-columns: minmax(96px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr) 38px;
+  grid-template-columns: minmax(96px, 1fr) minmax(130px, 1.1fr) minmax(120px, 1fr) minmax(150px, 1fr) 38px;
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -471,19 +541,36 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .admin-login-form,
+  .admin-create-form {
+    grid-template-columns: 1fr;
+  }
+
+  .managed-users-head {
+    display: none;
+  }
+
   .managed-user {
     grid-template-columns: 1fr 38px;
+  }
+
+  .managed-user span,
+  .managed-user code {
+    grid-column: 1 / -1;
   }
 }
 
 @media (max-width: 620px) {
-  .shell {
+  .shell,
+  .admin-shell {
     width: min(100vw - 18px, 1240px);
     padding: 10px 0;
   }
 
   .control-panel,
-  .status-panel {
+  .status-panel,
+  .admin-login-panel,
+  .admin-workspace {
     padding: 18px;
   }
 

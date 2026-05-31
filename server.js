@@ -2,6 +2,7 @@ import express from "express";
 import { nanoid } from "nanoid";
 import { EventEmitter } from "node:events";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { resolve } from "node:path";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
 import { authenticateUser, bindStudentId, createUser, deleteUser, getUser, listUsers } from "./src/authStore.js";
 
@@ -14,13 +15,24 @@ const serverMode = {
   forceHeadless: /^(1|true|yes|on)$/i.test(String(process.env.FORCE_HEADLESS || "")),
 };
 const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
-const adminKey = process.env.ADMIN_KEY || "";
+const adminUsername = process.env.ADMIN_USERNAME || "";
+const adminPassword = process.env.ADMIN_PASSWORD || "";
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
 
 function signSession(username) {
   return createHmac("sha256", sessionSecret).update(username).digest("hex");
+}
+
+function signAdminSession(username) {
+  return createHmac("sha256", sessionSecret).update(`admin:${username}:${adminPassword}`).digest("hex");
+}
+
+function constantTimeEqual(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual || ""));
+  const expectedBuffer = Buffer.from(String(expected || ""));
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
 function parseCookies(header = "") {
@@ -54,6 +66,33 @@ function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", "seat_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
 }
 
+function readAdminSession(req) {
+  const raw = parseCookies(req.headers.cookie).admin_session;
+  if (!raw) return null;
+  const [encodedUsername, signature] = raw.split(".");
+  if (!encodedUsername || !signature) return null;
+  let username = "";
+  try {
+    username = Buffer.from(encodedUsername, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  const expected = signAdminSession(username);
+  if (!constantTimeEqual(signature, expected)) return null;
+  if (!constantTimeEqual(username, adminUsername)) return null;
+  return { username };
+}
+
+function setAdminSessionCookie(res, username) {
+  const encodedUsername = Buffer.from(username, "utf8").toString("base64url");
+  const value = `${encodedUsername}.${signAdminSession(username)}`;
+  res.setHeader("Set-Cookie", `admin_session=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
+}
+
+function clearAdminSessionCookie(res) {
+  res.setHeader("Set-Cookie", "admin_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+}
+
 function requireAuth(req, res, next) {
   const user = readSession(req);
   if (!user) {
@@ -69,17 +108,16 @@ function currentUser(req) {
 }
 
 function requireAdmin(req, res, next) {
-  const provided = String(req.headers["x-admin-key"] || req.body?.adminKey || "");
-  if (!adminKey) {
-    res.status(503).json({ ok: false, message: "未配置 ADMIN_KEY，账号管理页不可用" });
+  const admin = readAdminSession(req);
+  if (!adminUsername || !adminPassword) {
+    res.status(503).json({ ok: false, message: "未配置管理员账号密码" });
     return;
   }
-  const actualBuffer = Buffer.from(provided);
-  const expectedBuffer = Buffer.from(adminKey);
-  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) {
-    res.status(403).json({ ok: false, message: "管理员密钥错误" });
+  if (!admin) {
+    res.status(401).json({ ok: false, message: "请先登录管理员账号" });
     return;
   }
+  req.admin = admin;
   next();
 }
 
@@ -285,6 +323,10 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, target: TARGET.baseUrl, mode: serverMode, time: new Date().toISOString() });
 });
 
+app.get(["/admin", "/admin/"], (_req, res) => {
+  res.sendFile(resolve("public/admin.html"));
+});
+
 app.get("/api/auth/me", (req, res) => {
   res.json({ ok: true, user: readSession(req) });
 });
@@ -313,6 +355,34 @@ app.post("/api/auth/bind-student", requireAuth, (req, res) => {
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   }
+});
+
+app.get("/api/admin/me", (req, res) => {
+  if (!adminUsername || !adminPassword) {
+    res.status(503).json({ ok: false, message: "未配置管理员账号密码", admin: null });
+    return;
+  }
+  res.json({ ok: true, admin: readAdminSession(req) });
+});
+
+app.post("/api/admin/login", (req, res) => {
+  if (!adminUsername || !adminPassword) {
+    res.status(503).json({ ok: false, message: "未配置管理员账号密码" });
+    return;
+  }
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+  if (!constantTimeEqual(username, adminUsername) || !constantTimeEqual(password, adminPassword)) {
+    res.status(401).json({ ok: false, message: "管理员账号或密码错误" });
+    return;
+  }
+  setAdminSessionCookie(res, adminUsername);
+  res.json({ ok: true, admin: { username: adminUsername } });
+});
+
+app.post("/api/admin/logout", (_req, res) => {
+  clearAdminSessionCookie(res);
+  res.json({ ok: true });
 });
 
 app.get("/api/admin/users", requireAdmin, (_req, res) => {

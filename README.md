@@ -17,7 +17,7 @@ qdhhc 专用，可根据个人情况二开。本项目不鼓励恶意预约，�
 - 任务列表支持立即执行和一键删除。
 - 内置系统账号登录；账号只能由管理员命令生成，不提供自行注册入口。
 - 一个系统账号只能绑定一个学号，绑定后不能修改。预约提交时强制使用绑定学号，避免浏览器旧会话导致预约到其他学号。
-- 提供可视化账号管理页；管理员输入 `ADMIN_KEY` 后可以生成账号、查看初始密码、查看绑定学号并一键删除。
+- 提供独立可视化账号管理页：访问 `/admin` 后用预设管理员账号密码登录，可以生成账号、查看初始密码、查看绑定学号并一键删除。
 
 ## 运行
 
@@ -33,6 +33,12 @@ npm start
 
 ```text
 http://localhost:3000
+```
+
+管理员页面：
+
+```text
+http://localhost:3000/admin
 ```
 
 ### Docker 部署
@@ -51,6 +57,12 @@ docker compose up -d --build
 http://服务器IP:3000
 ```
 
+管理员页面：
+
+```text
+http://服务器IP:3000/admin
+```
+
 查看日志：
 
 ```bash
@@ -65,7 +77,7 @@ docker compose exec library-seat-reserver npm run create-user -- 用户名
 
 命令会输出随机密码。用户第一次登录后需要绑定学号，绑定后不能修改。
 
-也可以在网页的“账号管理”区域输入 `ADMIN_KEY` 解锁，然后可视化生成账号、查看账号密码和绑定学号。
+也可以访问 `/admin`，用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录后可视化生成账号、查看账号密码和绑定学号。
 
 停止服务：
 
@@ -82,7 +94,7 @@ git clone https://github.com/WanchaDJ/book.git
 cd book
 npm ci --omit=dev
 npx playwright install --with-deps chromium
-FORCE_HEADLESS=true TZ=Asia/Shanghai npm start
+ADMIN_USERNAME=admin ADMIN_PASSWORD=请改成强密码 FORCE_HEADLESS=true TZ=Asia/Shanghai npm start
 ```
 
 生成系统账号：
@@ -95,7 +107,7 @@ npm run create-user -- 用户名
 
 ```bash
 npm install -g pm2
-FORCE_HEADLESS=true TZ=Asia/Shanghai pm2 start server.js --name library-seat-reserver
+ADMIN_USERNAME=admin ADMIN_PASSWORD=请改成强密码 FORCE_HEADLESS=true TZ=Asia/Shanghai pm2 start server.js --name library-seat-reserver
 pm2 save
 ```
 
@@ -109,14 +121,15 @@ pm2 save
 | `TZ` | 系统时区 | 建议设为 `Asia/Shanghai`，保证每日定时按北京时间计算 |
 | `DATA_DIR` | `./data` | 系统账号数据保存目录 |
 | `SESSION_SECRET` | 随机值 | 登录 Cookie 签名密钥，服务器部署建议固定成一串随机字符 |
-| `ADMIN_KEY` | 空 | 账号管理页密钥；不设置时网页账号管理不可用 |
+| `ADMIN_USERNAME` | 空 | `/admin` 管理员账号；不设置时网页账号管理不可用 |
+| `ADMIN_PASSWORD` | 空 | `/admin` 管理员密码；不设置时网页账号管理不可用 |
 
 服务器部署时请保持 `FORCE_HEADLESS=true`。此时页面中的“执行时显示浏览器窗口”选项会被忽略，预约流程会使用无头 Chromium 运行。
 
 ## 使用方式
 
 1. 管理员先用 `npm run create-user -- 用户名` 生成系统账号。
-2. 如果配置了 `ADMIN_KEY`，也可以在页面“账号管理”中生成账号，并查看账号、初始密码、绑定学号。
+2. 如果配置了 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`，也可以访问 `/admin`，登录后生成账号，并查看账号、初始密码、绑定学号。
 3. 用户用系统账号登录本工具。
 4. 第一次登录后绑定自己的图书馆学号；一个系统账号只能绑定一个学号，绑定后不能修改。
 5. 输入统一身份认证密码。
@@ -145,7 +158,7 @@ pm2 save
 - 红色垃圾桶按钮会删除任务，并清除该任务的定时器。
 - 任务只保存在当前 Node 进程内，重启服务后需要重新创建任务。
 - 系统账号和绑定学号保存在 `DATA_DIR/users.json`。Docker 部署会把 `./data` 挂载到容器内，避免重建容器后丢失账号。
-- 页面“账号管理”支持删除账号。删除账号会同时清除该账号当前进程里的定时任务。
+- `/admin` 账号管理页支持删除账号。删除账号会同时清除该账号当前进程里的定时任务。
 - 命令行和网页新生成的账号会保存初始密码用于管理页查看；旧版本已存在账号没有初始密码记录时会显示“旧账号无记录”。
 
 ## 安全说明
@@ -153,7 +166,7 @@ pm2 save
 - 密码只保存在当前 Node 进程内，页面不会自动清空密码输入框，方便继续检查座位或创建新任务。
 - 不要把真实账号、密码、Cookie 或 token 提交到仓库。
 - 生产环境请修改 `SESSION_SECRET`，不要使用示例值。
-- 生产环境请修改 `ADMIN_KEY`，不要使用示例值；不要把管理员密钥发给普通用户。
+- 生产环境请修改 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`，不要使用示例值；不要把管理员账号密码发给普通用户。
 - 服务器部署时建议只绑定可信网络，或在 Nginx / 宝塔 / 反向代理层增加访问密码，不要把页面裸露到公网。
 - 本项目不做验证码识别、滑块绕过、接口绕过或高频重试。
 - 本项目是本地辅助工具，最终预约结果请以官网预约记录为准。
