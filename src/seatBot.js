@@ -232,7 +232,11 @@ async function readUserInfoFromPage(page) {
 function apiHeaders(userInfo = {}) {
   const headers = {
     accept: "application/json, text/plain, */*",
+    "accept-language": "zh-CN,zh;q=0.9",
     lan: "1",
+    origin: TARGET.baseUrl,
+    referer: TARGET.mobileReserveUrl,
+    "user-agent": USER_AGENT,
   };
   if (userInfo.token) headers.token = String(userInfo.token);
   return headers;
@@ -263,10 +267,14 @@ async function apiPost(context, userInfo, path, payload, action) {
     data: payload,
     headers: {
       ...apiHeaders(userInfo),
-      "content-type": "application/json",
+      "content-type": "application/json;charset=UTF-8",
     },
   });
   return readApiResponse(response, action);
+}
+
+function officialAccNo(userInfo, form) {
+  return String(userInfo?.accNo || userInfo?.logonName || userInfo?.account || form.account || "").trim();
 }
 
 async function getLoggedInUserInfo(context, page, form, log) {
@@ -472,9 +480,13 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
       const { room, device } = await findSeatDevice(context, userInfo, form, segment, log, seatNo);
       await checkDeviceTips(context, userInfo, device, segment);
 
-      const accNo = form.account;
+      const accNo = officialAccNo(userInfo, form);
       const devId = device.devId ?? device.deviceId;
+      if (!accNo) throw new Error("没有从登录会话中取得官网账号字段 accNo，无法提交预约");
       if (!devId) throw new Error(`座位 ${seatLabel(device)} 缺少 devId，无法提交预约`);
+      if (accNo !== form.account) {
+        log("info", `使用官网账号字段 appAccNo=${accNo} 提交，绑定学号 ${form.account} 已校验通过`);
+      }
 
       const payload = {
         testName: form.testName || "",
@@ -489,7 +501,17 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
       };
 
       const data = await apiPost(context, userInfo, "reserve", payload, `提交第 ${index + 1} 段预约`);
-      if (data?.code !== 0) throw new Error(data?.message || `第 ${index + 1} 段预约失败`);
+      if (data?.code !== 0) {
+        const payloadSummary = {
+          appAccNo: payload.appAccNo,
+          resvMember: payload.resvMember,
+          resvDev: payload.resvDev,
+          sysKind: payload.sysKind,
+          resvBeginTime: payload.resvBeginTime,
+          resvEndTime: payload.resvEndTime,
+        };
+        throw new Error(`${data?.message || `第 ${index + 1} 段预约失败`}；提交摘要 ${JSON.stringify(payloadSummary)}`);
+      }
 
       log("success", `第 ${index + 1} 段预约提交成功：${room.label} / ${seatLabel(device)}（${label} ${seatNo}）`);
       return {
