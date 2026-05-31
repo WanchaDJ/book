@@ -9,5 +9,9 @@ services:
       PORT: 3000
       FORCE_HEADLESS: "true"
       TZ: Asia/Shanghai
+      DATA_DIR: /app/data
+      SESSION_SECRET: "change-this-session-secret"
     ports:
       - "3000:3000"
+    volumes:
+      - ./data:/app/data

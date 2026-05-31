@@ -176,6 +176,16 @@ function normalizeDigits(value) {
   return digits.replace(/^0+/, "") || digits;
 }
 
+function assertLoggedInAccount(userInfo, form) {
+  const expected = normalizeDigits(form.account);
+  const values = [userInfo.accNo, userInfo.logonName, userInfo.account].filter(Boolean);
+  if (!expected || !values.length) return;
+  const matched = values.some((value) => normalizeDigits(value) === expected);
+  if (!matched) {
+    throw new Error(`登录账号与绑定学号不一致：当前会话为 ${values.join(" / ")}，绑定学号为 ${form.account}`);
+  }
+}
+
 function parseStorageJson(value) {
   if (!value || typeof value !== "string") return null;
   try {
@@ -261,7 +271,10 @@ async function apiPost(context, userInfo, path, payload, action) {
 
 async function getLoggedInUserInfo(context, page, form, log) {
   let userInfo = await readUserInfoFromPage(page);
-  if (userInfo) return userInfo;
+  if (userInfo) {
+    assertLoggedInAccount(userInfo, form);
+    return userInfo;
+  }
 
   log("info", "正在从登录会话读取用户信息");
   const data = await apiGet(context, {}, "auth/userInfo", {}, "读取用户信息");
@@ -280,6 +293,7 @@ async function getLoggedInUserInfo(context, page, form, log) {
   if (!userInfo.token) {
     log("warn", "已取得用户信息，但未发现 token；将依赖当前网页登录 Cookie 提交");
   }
+  assertLoggedInAccount(userInfo, form);
   return userInfo;
 }
 
@@ -458,7 +472,7 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
       const { room, device } = await findSeatDevice(context, userInfo, form, segment, log, seatNo);
       await checkDeviceTips(context, userInfo, device, segment);
 
-      const accNo = userInfo.accNo || userInfo.logonName || userInfo.account || form.account;
+      const accNo = form.account;
       const devId = device.devId ?? device.deviceId;
       if (!devId) throw new Error(`座位 ${seatLabel(device)} 缺少 devId，无法提交预约`);
 

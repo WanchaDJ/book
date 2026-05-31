@@ -2,6 +2,7 @@ node_modules/
 .site-scan/
 site-check.png
 *.log
+data/
 .env
 .env.*
 !.env.example

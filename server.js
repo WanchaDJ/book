@@ -1,7 +1,9 @@
 import express from "express";
 import { nanoid } from "nanoid";
 import { EventEmitter } from "node:events";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
+import { authenticateUser, bindStudentId, getUser } from "./src/authStore.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -11,9 +13,59 @@ const serverMode = {
   nodeEnv: process.env.NODE_ENV || "development",
   forceHeadless: /^(1|true|yes|on)$/i.test(String(process.env.FORCE_HEADLESS || "")),
 };
+const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
+
+function signSession(username) {
+  return createHmac("sha256", sessionSecret).update(username).digest("hex");
+}
+
+function parseCookies(header = "") {
+  return Object.fromEntries(
+    header
+      .split(";")
+      .map((part) => part.trim().split("="))
+      .filter(([key, value]) => key && value)
+      .map(([key, value]) => [key, decodeURIComponent(value)]),
+  );
+}
+
+function readSession(req) {
+  const raw = parseCookies(req.headers.cookie).seat_session;
+  if (!raw) return null;
+  const [username, signature] = raw.split(".");
+  if (!username || !signature) return null;
+  const expected = signSession(username);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
+  return getUser(username);
+}
+
+function setSessionCookie(res, username) {
+  const value = `${username}.${signSession(username)}`;
+  res.setHeader("Set-Cookie", `seat_session=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader("Set-Cookie", "seat_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+}
+
+function requireAuth(req, res, next) {
+  const user = readSession(req);
+  if (!user) {
+    res.status(401).json({ ok: false, message: "请先登录系统账号" });
+    return;
+  }
+  req.user = user;
+  next();
+}
+
+function currentUser(req) {
+  return req.user || readSession(req);
+}
 
 function nowText() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
@@ -118,8 +170,7 @@ function validatePayload(body) {
   const errors = [];
   const seatCandidates = normalizeSeatCandidates(body);
   if (!body || typeof body !== "object") errors.push("请求内容无效");
-  if (!body.account?.trim()) errors.push("请输入账号");
-  if (!body.password?.trim()) errors.push("请输入密码");
+  if (!body.password?.trim()) errors.push("请输入统一认证密码");
   if (!body.startTime) errors.push("请选择开始抢座时间");
   if (body.startTime && !isClockTime(body.startTime)) errors.push("开始抢座时间无效，请使用 HH:mm");
   if (!seatCandidates.length) errors.push("请输入座位号");
@@ -146,8 +197,7 @@ function validateSeatPreviewPayload(body) {
   const errors = [];
   const seatCandidates = normalizeSeatCandidates(body);
   if (!body || typeof body !== "object") errors.push("请求内容无效");
-  if (!body.account?.trim()) errors.push("请输入账号");
-  if (!body.password?.trim()) errors.push("请输入密码");
+  if (!body.password?.trim()) errors.push("请输入统一认证密码");
   if (!seatCandidates.length) errors.push("请输入座位号");
   if (!body.date || Number.isNaN(new Date(`${body.date}T00:00:00`).getTime())) errors.push("请选择有效日期");
   return errors;
@@ -215,7 +265,37 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, target: TARGET.baseUrl, mode: serverMode, time: new Date().toISOString() });
 });
 
-app.get("/api/seat-menu", async (_req, res) => {
+app.get("/api/auth/me", (req, res) => {
+  res.json({ ok: true, user: readSession(req) });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+  const user = authenticateUser(username, password);
+  if (!user) {
+    res.status(401).json({ ok: false, message: "系统账号或密码错误" });
+    return;
+  }
+  setSessionCookie(res, user.username);
+  res.json({ ok: true, user });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/bind-student", requireAuth, (req, res) => {
+  try {
+    const user = bindStudentId(req.user.username, req.body?.studentId);
+    res.json({ ok: true, user });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+app.get("/api/seat-menu", requireAuth, async (_req, res) => {
   try {
     const menu = await fetchSeatMenu();
     res.json({ ok: true, menu });
@@ -224,11 +304,21 @@ app.get("/api/seat-menu", async (_req, res) => {
   }
 });
 
-app.get("/api/tasks", (_req, res) => {
-  res.json({ tasks: [...tasks.values()].map(publicTask).reverse() });
+app.get("/api/tasks", requireAuth, (req, res) => {
+  res.json({
+    tasks: [...tasks.values()]
+      .filter((task) => task.owner === req.user.username)
+      .map(publicTask)
+      .reverse(),
+  });
 });
 
-app.post("/api/tasks", (req, res) => {
+app.post("/api/tasks", requireAuth, (req, res) => {
+  const user = currentUser(req);
+  if (!user.boundStudentId) {
+    res.status(400).json({ ok: false, errors: ["请先绑定学号"] });
+    return;
+  }
   const startAt = req.body?.startTime && isClockTime(req.body.startTime) ? nextRunAt(req.body.startTime) : null;
   const errors = validatePayload(req.body);
   if (errors.length) {
@@ -239,7 +329,7 @@ app.post("/api/tasks", (req, res) => {
   const runDate = new Date(startAt.getFullYear(), startAt.getMonth(), startAt.getDate());
   const seatCandidates = normalizeSeatCandidates(req.body);
   const form = {
-    account: req.body.account.trim(),
+    account: user.boundStudentId,
     password: req.body.password,
     startTime: req.body.startTime,
     seatNo: seatCandidates[0],
@@ -269,6 +359,7 @@ app.post("/api/tasks", (req, res) => {
     lastRunOk: null,
     recurring: true,
     cancelled: false,
+    owner: user.username,
     target: TARGET,
     form,
     logs: [],
@@ -285,7 +376,12 @@ app.post("/api/tasks", (req, res) => {
   res.json({ ok: true, task: publicTask(task) });
 });
 
-app.post("/api/seat-preview", async (req, res) => {
+app.post("/api/seat-preview", requireAuth, async (req, res) => {
+  const user = currentUser(req);
+  if (!user.boundStudentId) {
+    res.status(400).json({ ok: false, errors: ["请先绑定学号"] });
+    return;
+  }
   const errors = validateSeatPreviewPayload(req.body);
   if (errors.length) {
     res.status(400).json({ ok: false, errors });
@@ -298,7 +394,7 @@ app.post("/api/seat-preview", async (req, res) => {
     const seatCandidates = normalizeSeatCandidates(req.body);
     const result = await previewSeatMatch(
       {
-        account: req.body.account.trim(),
+        account: user.boundStudentId,
         password: req.body.password,
         seatNo: seatCandidates[0],
         seatCandidates,
@@ -314,10 +410,14 @@ app.post("/api/seat-preview", async (req, res) => {
   }
 });
 
-app.post("/api/tasks/:id/run-now", (req, res) => {
+app.post("/api/tasks/:id/run-now", requireAuth, (req, res) => {
   const task = tasks.get(req.params.id);
   if (!task) {
     res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.owner !== req.user.username) {
+    res.status(403).json({ ok: false, message: "无权操作该任务" });
     return;
   }
   if (!["scheduled", "failed"].includes(task.status)) {
@@ -331,21 +431,25 @@ app.post("/api/tasks/:id/run-now", (req, res) => {
   res.json({ ok: true, task: publicTask(task) });
 });
 
-app.delete("/api/tasks/:id", (req, res) => {
+app.delete("/api/tasks/:id", requireAuth, (req, res) => {
   const task = tasks.get(req.params.id);
   if (!task) {
     res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.owner !== req.user.username) {
+    res.status(403).json({ ok: false, message: "无权操作该任务" });
     return;
   }
   if (task.timer) clearTimeout(task.timer);
   task.timer = null;
   task.cancelled = true;
   tasks.delete(task.id);
-  bus.emit("task-deleted", { taskId: task.id });
+  bus.emit("task-deleted", { taskId: task.id, owner: task.owner });
   res.json({ ok: true, taskId: task.id });
 });
 
-app.get("/api/events", (req, res) => {
+app.get("/api/events", requireAuth, (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -353,9 +457,16 @@ app.get("/api/events", (req, res) => {
   });
   res.write(`data: ${JSON.stringify({ type: "hello", at: nowText() })}\n\n`);
 
-  const onLog = (payload) => res.write(`data: ${JSON.stringify({ type: "log", ...payload })}\n\n`);
-  const onTask = (task) => res.write(`data: ${JSON.stringify({ type: "task", task })}\n\n`);
-  const onTaskDeleted = (payload) => res.write(`data: ${JSON.stringify({ type: "task-deleted", ...payload })}\n\n`);
+  const canReadTask = (taskId) => tasks.get(taskId)?.owner === req.user.username;
+  const onLog = (payload) => {
+    if (canReadTask(payload.taskId)) res.write(`data: ${JSON.stringify({ type: "log", ...payload })}\n\n`);
+  };
+  const onTask = (task) => {
+    if (canReadTask(task.id)) res.write(`data: ${JSON.stringify({ type: "task", task })}\n\n`);
+  };
+  const onTaskDeleted = (payload) => {
+    if (payload.owner === req.user.username) res.write(`data: ${JSON.stringify({ type: "task-deleted", taskId: payload.taskId })}\n\n`);
+  };
   bus.on("log", onLog);
   bus.on("task", onTask);
   bus.on("task-deleted", onTaskDeleted);

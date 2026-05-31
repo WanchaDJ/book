@@ -5,9 +5,17 @@ const taskListEl = document.querySelector("#taskList");
 const logBox = document.querySelector("#logBox");
 const statusEl = document.querySelector("#serverStatus");
 const roomSelect = document.querySelector("#roomId");
+const loginForm = document.querySelector("#loginForm");
+const bindForm = document.querySelector("#bindForm");
+const userBar = document.querySelector("#userBar");
+const authStatus = document.querySelector("#authStatus");
+const userInfoText = document.querySelector("#userInfoText");
+const logoutButton = document.querySelector("#logoutButton");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
+let currentUser = null;
+let events = null;
 
 function pad(value) {
   return String(value).padStart(2, "0");
@@ -71,6 +79,32 @@ function normalizeSeatList(values) {
 
 function collectSeatCandidates() {
   return normalizeSeatList([form.seatNo.value, form.seatNoAlt1.value, form.seatNoAlt2.value]);
+}
+
+function setControlsEnabled(enabled) {
+  for (const element of form.elements) {
+    if (element.id !== "account") element.disabled = !enabled;
+  }
+  document.querySelector("#addSegment").disabled = !enabled;
+  document.querySelector("#refreshMenu").disabled = !enabled;
+  document.querySelector("#previewSeat").disabled = !enabled;
+}
+
+function renderAuth() {
+  const loggedIn = Boolean(currentUser);
+  const bound = Boolean(currentUser?.boundStudentId);
+  authStatus.textContent = loggedIn ? (bound ? "已绑定" : "待绑定") : "未登录";
+  loginForm.classList.toggle("hidden", loggedIn);
+  bindForm.classList.toggle("hidden", !loggedIn || bound);
+  userBar.classList.toggle("hidden", !loggedIn);
+  form.account.value = bound ? currentUser.boundStudentId : "";
+  setControlsEnabled(bound);
+
+  if (loggedIn) {
+    userInfoText.textContent = bound
+      ? `系统账号 ${currentUser.username}，绑定学号 ${currentUser.boundStudentId}`
+      : `系统账号 ${currentUser.username}，请先绑定学号`;
+  }
 }
 
 function addLog(entry) {
@@ -184,13 +218,23 @@ function renderTasks() {
 }
 
 async function loadTasks() {
+  if (!currentUser) {
+    tasks = [];
+    renderTasks();
+    return;
+  }
   const response = await fetch("/api/tasks");
+  if (response.status === 401) {
+    await loadCurrentUser();
+    return;
+  }
   const data = await response.json();
   tasks = data.tasks || [];
   renderTasks();
 }
 
 async function loadSeatMenu() {
+  if (!currentUser?.boundStudentId) return;
   roomSelect.disabled = true;
   try {
     const response = await fetch("/api/seat-menu");
@@ -215,6 +259,10 @@ async function loadSeatMenu() {
 
 async function createTask(event) {
   event.preventDefault();
+  if (!currentUser?.boundStudentId) {
+    addLog({ level: "error", message: "请先登录并绑定学号" });
+    return;
+  }
   const submitButton = form.querySelector(".primary");
   const segments = collectSegments();
   const seatCandidates = collectSeatCandidates();
@@ -226,7 +274,6 @@ async function createTask(event) {
   }
 
   const payload = {
-    account: form.account.value,
     password: form.password.value,
     startTime: form.startTime.value,
     seatNo: seatCandidates[0],
@@ -258,11 +305,14 @@ async function createTask(event) {
 }
 
 async function previewSeat() {
+  if (!currentUser?.boundStudentId) {
+    addLog({ level: "error", message: "请先登录并绑定学号" });
+    return;
+  }
   const button = document.querySelector("#previewSeat");
   const firstSegment = collectSegments()[0];
   const seatCandidates = collectSeatCandidates();
   const payload = {
-    account: form.account.value,
     password: form.password.value,
     seatNo: seatCandidates[0] || "",
     seatCandidates,
@@ -271,8 +321,8 @@ async function previewSeat() {
     visibleBrowser: document.querySelector("#visibleBrowser").checked,
   };
 
-  if (!payload.account || !payload.password || !payload.seatNo) {
-    addLog({ level: "error", message: "请先填写账号、密码和座位号" });
+  if (!payload.password || !payload.seatNo) {
+    addLog({ level: "error", message: "请先填写统一认证密码和座位号" });
     return;
   }
 
@@ -312,7 +362,9 @@ async function handleTaskAction(event) {
 }
 
 function connectEvents() {
-  const events = new EventSource("/api/events");
+  if (events) events.close();
+  if (!currentUser) return;
+  events = new EventSource("/api/events");
   events.onopen = () => {
     statusEl.textContent = "已连接";
   };
@@ -335,6 +387,77 @@ function connectEvents() {
   };
 }
 
+async function loadCurrentUser() {
+  const response = await fetch("/api/auth/me");
+  const data = await response.json();
+  currentUser = data.user || null;
+  renderAuth();
+  await loadTasks();
+  if (currentUser?.boundStudentId) {
+    await loadSeatMenu();
+    connectEvents();
+  } else if (events) {
+    events.close();
+    events = null;
+  }
+}
+
+async function login(event) {
+  event.preventDefault();
+  const payload = {
+    username: document.querySelector("#loginUsername").value,
+    password: document.querySelector("#loginPassword").value,
+  };
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "登录失败");
+    currentUser = data.user;
+    document.querySelector("#loginPassword").value = "";
+    renderAuth();
+    addLog({ level: "success", message: `系统账号 ${currentUser.username} 已登录` });
+    await loadCurrentUser();
+  } catch (error) {
+    addLog({ level: "error", message: error.message });
+  }
+}
+
+async function bindStudent(event) {
+  event.preventDefault();
+  const payload = { studentId: document.querySelector("#boundStudentId").value };
+  try {
+    const response = await fetch("/api/auth/bind-student", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "绑定失败");
+    currentUser = data.user;
+    document.querySelector("#boundStudentId").value = "";
+    renderAuth();
+    addLog({ level: "success", message: `已绑定学号 ${currentUser.boundStudentId}` });
+    await loadCurrentUser();
+  } catch (error) {
+    addLog({ level: "error", message: error.message });
+  }
+}
+
+async function logout() {
+  await fetch("/api/auth/logout", { method: "POST" });
+  currentUser = null;
+  tasks = [];
+  if (events) events.close();
+  events = null;
+  renderAuth();
+  renderTasks();
+  addLog({ level: "warn", message: "已退出系统账号" });
+}
+
 function tickClock() {
   document.querySelector("#clock").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
 }
@@ -345,6 +468,9 @@ document.querySelector("#previewSeat").addEventListener("click", previewSeat);
 taskListEl.addEventListener("click", handleTaskAction);
 form.startTime.addEventListener("input", updateDefaultSegmentDates);
 form.addEventListener("submit", createTask);
+loginForm.addEventListener("submit", login);
+bindForm.addEventListener("submit", bindStudent);
+logoutButton.addEventListener("click", logout);
 
 const start = new Date(Date.now() + 5 * 60 * 1000);
 form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
@@ -352,6 +478,5 @@ lastDefaultSegmentDate = defaultSegmentDate();
 addSegment();
 tickClock();
 setInterval(tickClock, 1000);
-loadSeatMenu();
-loadTasks();
-connectEvents();
+renderAuth();
+loadCurrentUser();

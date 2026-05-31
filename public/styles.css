@@ -53,6 +53,11 @@ select {
   padding: 28px;
 }
 
+.auth-panel {
+  grid-column: span 2;
+  padding: 20px 24px;
+}
+
 .status-panel {
   padding: 24px;
   min-height: 720px;
@@ -113,6 +118,32 @@ h2 {
   gap: 16px;
 }
 
+.auth-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.user-bar {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f3f6f1;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.hidden {
+  display: none !important;
+}
+
 .span-2 {
   grid-column: span 2;
 }
@@ -139,6 +170,11 @@ select {
   color: var(--ink);
   padding: 10px 12px;
   outline: none;
+}
+
+input[readonly] {
+  background: #eef3ef;
+  color: var(--muted);
 }
 
 input:focus,
@@ -380,6 +416,14 @@ button:disabled {
 
 @media (max-width: 920px) {
   .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-panel {
+    grid-column: span 1;
+  }
+
+  .auth-grid {
     grid-template-columns: 1fr;
   }
 }
