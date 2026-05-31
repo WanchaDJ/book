@@ -42,6 +42,7 @@ function publicUser(user) {
   if (!user) return null;
   return {
     username: user.username,
+    initialPassword: user.initialPassword || null,
     boundStudentId: user.boundStudentId || null,
     createdAt: user.createdAt,
     boundAt: user.boundAt || null,
@@ -70,6 +71,7 @@ export function createUser(username, password) {
     id: randomBytes(12).toString("hex"),
     username: name,
     passwordHash: passwordHash(String(password)),
+    initialPassword: String(password),
     boundStudentId: null,
     createdAt: new Date().toISOString(),
     boundAt: null,
@@ -110,4 +112,14 @@ export function bindStudentId(username, studentId) {
     writeStore(store);
   }
   return publicUser(user);
+}
+
+export function deleteUser(username) {
+  const name = String(username || "").trim();
+  const store = readStore();
+  const nextUsers = store.users.filter((item) => item.username.toLowerCase() !== name.toLowerCase());
+  if (nextUsers.length === store.users.length) throw new Error("系统账号不存在");
+  store.users = nextUsers;
+  writeStore(store);
+  return true;
 }

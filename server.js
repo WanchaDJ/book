@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { EventEmitter } from "node:events";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
-import { authenticateUser, bindStudentId, getUser } from "./src/authStore.js";
+import { authenticateUser, bindStudentId, createUser, deleteUser, getUser, listUsers } from "./src/authStore.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -14,6 +14,7 @@ const serverMode = {
   forceHeadless: /^(1|true|yes|on)$/i.test(String(process.env.FORCE_HEADLESS || "")),
 };
 const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
+const adminKey = process.env.ADMIN_KEY || "";
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
@@ -65,6 +66,25 @@ function requireAuth(req, res, next) {
 
 function currentUser(req) {
   return req.user || readSession(req);
+}
+
+function requireAdmin(req, res, next) {
+  const provided = String(req.headers["x-admin-key"] || req.body?.adminKey || "");
+  if (!adminKey) {
+    res.status(503).json({ ok: false, message: "未配置 ADMIN_KEY，账号管理页不可用" });
+    return;
+  }
+  const actualBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(adminKey);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) {
+    res.status(403).json({ ok: false, message: "管理员密钥错误" });
+    return;
+  }
+  next();
+}
+
+function randomPassword() {
+  return randomBytes(9).toString("base64url");
 }
 
 function nowText() {
@@ -292,6 +312,38 @@ app.post("/api/auth/bind-student", requireAuth, (req, res) => {
     res.json({ ok: true, user });
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+app.get("/api/admin/users", requireAdmin, (_req, res) => {
+  res.json({ ok: true, users: listUsers() });
+});
+
+app.post("/api/admin/users", requireAdmin, (req, res) => {
+  try {
+    const username = req.body?.username;
+    const password = req.body?.password || randomPassword();
+    const user = createUser(username, password);
+    res.json({ ok: true, user: { ...user, initialPassword: password } });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+app.delete("/api/admin/users/:username", requireAdmin, (req, res) => {
+  try {
+    const username = req.params.username;
+    for (const task of tasks.values()) {
+      if (task.owner !== username) continue;
+      if (task.timer) clearTimeout(task.timer);
+      task.cancelled = true;
+      tasks.delete(task.id);
+      bus.emit("task-deleted", { taskId: task.id, owner: task.owner });
+    }
+    deleteUser(username);
+    res.json({ ok: true, username });
+  } catch (error) {
+    res.status(404).json({ ok: false, message: error.message });
   }
 });
 

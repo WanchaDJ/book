@@ -102,6 +102,14 @@ h2 {
   font-size: 13px;
 }
 
+.compact-head {
+  align-items: center;
+}
+
+.compact-head h2 {
+  font-size: 16px;
+}
+
 .clock {
   min-width: 116px;
   padding: 10px 12px;
@@ -138,6 +146,42 @@ h2 {
   background: #f3f6f1;
   font-size: 13px;
   font-weight: 800;
+}
+
+.admin-box {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.managed-users {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.managed-user {
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr) 38px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.managed-user strong,
+.managed-user code {
+  overflow-wrap: anywhere;
+}
+
+.managed-user code {
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #eef3ef;
+  color: var(--ink);
 }
 
 .hidden {
@@ -425,6 +469,10 @@ button:disabled {
 
   .auth-grid {
     grid-template-columns: 1fr;
+  }
+
+  .managed-user {
+    grid-template-columns: 1fr 38px;
   }
 }
 

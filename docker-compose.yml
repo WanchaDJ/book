@@ -11,6 +11,7 @@ services:
       TZ: Asia/Shanghai
       DATA_DIR: /app/data
       SESSION_SECRET: "change-this-session-secret"
+      ADMIN_KEY: "change-this-admin-key"
     ports:
       - "3000:3000"
     volumes:
