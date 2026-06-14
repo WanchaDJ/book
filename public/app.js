@@ -18,6 +18,7 @@ let tasks = [];
 let lastDefaultSegmentDate = "";
 let currentUser = null;
 let events = null;
+let taskNameTouched = false;
 
 function pad(value) {
   return String(value).padStart(2, "0");
@@ -122,6 +123,15 @@ function normalizeSeatList(values) {
 
 function collectSeatCandidates() {
   return normalizeSeatList([form.seatNo.value, form.seatNoAlt1.value, form.seatNoAlt2.value]);
+}
+
+function resetTaskNameField() {
+  form.taskName.value = "";
+  taskNameTouched = false;
+}
+
+function markTaskNameTouched() {
+  taskNameTouched = true;
 }
 
 function setControlsEnabled(enabled) {
@@ -232,7 +242,7 @@ function validateSegments(segments) {
 
 function statusText(status) {
   return {
-    scheduled: "每日等待中",
+    scheduled: "等待中",
     running: "执行中",
     done: "已完成",
     failed: "失败",
@@ -342,7 +352,6 @@ async function createTask(event) {
   }
 
   const payload = {
-    name: form.taskName.value,
     password: form.password.value,
     startTime: form.startTime.value,
     scheduleType: schedule.scheduleType,
@@ -354,6 +363,8 @@ async function createTask(event) {
     visibleBrowser: document.querySelector("#visibleBrowser").checked,
     segments,
   };
+  const taskName = form.taskName.value.trim();
+  if (taskNameTouched && taskName) payload.name = taskName;
 
   submitButton.disabled = true;
   try {
@@ -366,7 +377,7 @@ async function createTask(event) {
     if (!response.ok || !data.ok) {
       throw new Error((data.errors || [data.message || "创建失败"]).join("；"));
     }
-    form.taskName.value = "";
+    resetTaskNameField();
     addLog({ level: "success", message: `任务已创建：${data.task.name || data.task.id}` });
     await loadTasks();
   } catch (error) {
@@ -569,6 +580,10 @@ document.querySelector("#refreshMenu").addEventListener("click", loadSeatMenu);
 document.querySelector("#previewSeat").addEventListener("click", previewSeat);
 taskListEl.addEventListener("click", handleTaskAction);
 form.startTime.addEventListener("input", updateDefaultSegmentDates);
+form.taskName.addEventListener("beforeinput", markTaskNameTouched);
+form.taskName.addEventListener("paste", markTaskNameTouched);
+form.taskName.addEventListener("cut", markTaskNameTouched);
+form.taskName.addEventListener("drop", markTaskNameTouched);
 for (const input of form.querySelectorAll('input[name="scheduleType"], input[name="weekdays"]')) {
   input.addEventListener("change", updateScheduleControls);
 }
@@ -577,12 +592,14 @@ loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);
 logoutButton.addEventListener("click", logout);
 clearLogsButton.addEventListener("click", clearLogs);
+window.addEventListener("pageshow", resetTaskNameField);
 
 const start = new Date(Date.now() + 5 * 60 * 1000);
 form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
 lastDefaultSegmentDate = defaultSegmentDate();
 addSegment();
 updateScheduleControls();
+resetTaskNameField();
 tickClock();
 setInterval(tickClock, 1000);
 renderAuth();
