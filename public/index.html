@@ -71,6 +71,22 @@
             <label for="startTime">开始抢座时间</label>
             <input id="startTime" name="startTime" type="time" required step="60" />
           </div>
+          <div class="field span-2">
+            <label>执行时间</label>
+            <div class="segmented schedule-mode" role="radiogroup" aria-label="执行时间">
+              <label><input type="radio" name="scheduleType" value="daily" checked /> 每日执行</label>
+              <label><input type="radio" name="scheduleType" value="weekly" /> 自定义每周执行</label>
+            </div>
+            <div class="weekday-picker hidden" id="weekdayPicker" aria-label="每周执行日期">
+              <label><input type="checkbox" name="weekdays" value="1" /> 周一</label>
+              <label><input type="checkbox" name="weekdays" value="2" /> 周二</label>
+              <label><input type="checkbox" name="weekdays" value="3" /> 周三</label>
+              <label><input type="checkbox" name="weekdays" value="4" /> 周四</label>
+              <label><input type="checkbox" name="weekdays" value="5" /> 周五</label>
+              <label><input type="checkbox" name="weekdays" value="6" /> 周六</label>
+              <label><input type="checkbox" name="weekdays" value="0" /> 周日</label>
+            </div>
+          </div>
           <div class="field">
             <label for="seatNo">座位号</label>
             <input id="seatNo" name="seatNo" required placeholder="例如 036" />

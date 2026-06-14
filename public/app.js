@@ -12,6 +12,7 @@ const authStatus = document.querySelector("#authStatus");
 const userInfoText = document.querySelector("#userInfoText");
 const logoutButton = document.querySelector("#logoutButton");
 const clearLogsButton = document.querySelector("#clearLogs");
+const weekdayPicker = document.querySelector("#weekdayPicker");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
@@ -36,13 +37,42 @@ function isClockTime(value) {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value || "");
 }
 
-function nextRunDate(startTime = form.startTime.value) {
+function collectWeekdays() {
+  return [...form.querySelectorAll('input[name="weekdays"]:checked')].map((input) => Number(input.value));
+}
+
+function collectSchedule() {
+  const scheduleType = new FormData(form).get("scheduleType") === "weekly" ? "weekly" : "daily";
+  return {
+    scheduleType,
+    weekdays: scheduleType === "weekly" ? collectWeekdays() : [],
+  };
+}
+
+function scheduleLabel(schedule = { type: "daily", weekdays: [] }) {
+  if (schedule.type !== "weekly" || !schedule.weekdays?.length) return "每日执行";
+  const labels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return `每周 ${schedule.weekdays.map((day) => labels[day]).join("、")} 执行`;
+}
+
+function nextRunDate(startTime = form.startTime.value, schedule = collectSchedule()) {
+  const now = new Date();
   const date = new Date();
-  if (isClockTime(startTime)) {
-    const [hours, minutes] = startTime.split(":").map(Number);
-    date.setHours(hours, minutes, 0, 0);
-    if (date.getTime() <= Date.now() - 5000) date.setDate(date.getDate() + 1);
+  if (!isClockTime(startTime)) return date;
+
+  const [hours, minutes] = startTime.split(":").map(Number);
+  const weekly = schedule.scheduleType === "weekly" && schedule.weekdays.length > 0;
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const candidate = new Date(now);
+    candidate.setDate(now.getDate() + offset);
+    candidate.setHours(hours, minutes, 0, 0);
+    if (candidate.getTime() <= Date.now() - 5000) continue;
+    if (weekly && !schedule.weekdays.includes(candidate.getDay())) continue;
+    return candidate;
   }
+
+  date.setDate(now.getDate() + 1);
+  date.setHours(hours, minutes, 0, 0);
   return date;
 }
 
@@ -101,6 +131,12 @@ function setControlsEnabled(enabled) {
   document.querySelector("#addSegment").disabled = !enabled;
   document.querySelector("#refreshMenu").disabled = !enabled;
   document.querySelector("#previewSeat").disabled = !enabled;
+}
+
+function updateScheduleControls() {
+  const schedule = collectSchedule();
+  weekdayPicker.classList.toggle("hidden", schedule.scheduleType !== "weekly");
+  updateDefaultSegmentDates();
 }
 
 function renderAuth() {
@@ -219,11 +255,12 @@ function renderTasks() {
       const paused = task.status === "paused";
       const running = task.status === "running";
       const nextText = paused ? "已暂停" : `下次执行 ${scheduledAt}`;
+      const repeatText = scheduleLabel(task.form.schedule);
       return `
         <article class="task-card" data-id="${task.id}">
           <header>
             <span>${escapeHtml(task.name || task.id)} · ${statusText(task.status)}</span>
-            <span>每日 ${escapeHtml(task.form.startTime || "--:--")}</span>
+            <span>${escapeHtml(repeatText)} ${escapeHtml(task.form.startTime || "--:--")}</span>
           </header>
           <p>${escapeHtml(nextText)}；账号 ${escapeHtml(task.form.account)}；候选座位 ${escapeHtml(seats)}；将预约 ${escapeHtml(segments)}${escapeHtml(last)}</p>
           <div class="task-actions">
@@ -295,8 +332,10 @@ async function createTask(event) {
   const submitButton = form.querySelector(".primary");
   const segments = collectSegments();
   const seatCandidates = collectSeatCandidates();
+  const schedule = collectSchedule();
   const errors = validateSegments(segments);
   if (!seatCandidates.length) errors.push("请输入座位号");
+  if (schedule.scheduleType === "weekly" && schedule.weekdays.length === 0) errors.push("请选择至少一个每周执行日期");
   if (errors.length) {
     errors.forEach((message) => addLog({ level: "error", message }));
     return;
@@ -306,6 +345,8 @@ async function createTask(event) {
     name: form.taskName.value,
     password: form.password.value,
     startTime: form.startTime.value,
+    scheduleType: schedule.scheduleType,
+    weekdays: schedule.weekdays,
     seatNo: seatCandidates[0],
     seatCandidates,
     roomId: form.roomId.value,
@@ -528,6 +569,9 @@ document.querySelector("#refreshMenu").addEventListener("click", loadSeatMenu);
 document.querySelector("#previewSeat").addEventListener("click", previewSeat);
 taskListEl.addEventListener("click", handleTaskAction);
 form.startTime.addEventListener("input", updateDefaultSegmentDates);
+for (const input of form.querySelectorAll('input[name="scheduleType"], input[name="weekdays"]')) {
+  input.addEventListener("change", updateScheduleControls);
+}
 form.addEventListener("submit", createTask);
 loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);
@@ -538,6 +582,7 @@ const start = new Date(Date.now() + 5 * 60 * 1000);
 form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
 lastDefaultSegmentDate = defaultSegmentDate();
 addSegment();
+updateScheduleControls();
 tickClock();
 setInterval(tickClock, 1000);
 renderAuth();

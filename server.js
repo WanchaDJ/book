@@ -205,17 +205,47 @@ function normalizeSeatCandidates(body) {
     .slice(0, 3);
 }
 
-function nextRunAt(startTime) {
+function normalizeWeekdays(value) {
+  if (!Array.isArray(value)) return [];
+  const days = value
+    .map((day) => Number(day))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+  return [...new Set(days)].sort((a, b) => a - b);
+}
+
+function normalizeSchedule(body) {
+  const type = body?.scheduleType === "weekly" ? "weekly" : "daily";
+  const weekdays = type === "weekly" ? normalizeWeekdays(body?.weekdays) : [];
+  return { type, weekdays };
+}
+
+function scheduleText(schedule = { type: "daily", weekdays: [] }) {
+  if (schedule.type !== "weekly" || !schedule.weekdays?.length) return "每日执行";
+  const labels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return `每周 ${schedule.weekdays.map((day) => labels[day]).join("、")} 执行`;
+}
+
+function nextRunAt(startTime, schedule = { type: "daily", weekdays: [] }) {
   const [hours, minutes] = startTime.split(":").map(Number);
   const date = new Date();
-  date.setHours(hours, minutes, 0, 0);
-  if (date.getTime() <= Date.now() - 5000) {
-    date.setDate(date.getDate() + 1);
+  const weekdays = normalizeWeekdays(schedule.weekdays);
+  const isWeekly = schedule.type === "weekly" && weekdays.length > 0;
+
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const candidate = new Date(date);
+    candidate.setDate(date.getDate() + offset);
+    candidate.setHours(hours, minutes, 0, 0);
+    if (candidate.getTime() <= Date.now() - 5000) continue;
+    if (isWeekly && !weekdays.includes(candidate.getDay())) continue;
+    return candidate;
   }
+
+  date.setDate(date.getDate() + 1);
+  date.setHours(hours, minutes, 0, 0);
   return date;
 }
 
-function scheduleTask(task, startAt = nextRunAt(task.form.startTime)) {
+function scheduleTask(task, startAt = nextRunAt(task.form.startTime, task.form.schedule)) {
   if (task.cancelled || task.status === "paused") return;
   if (task.timer) clearTimeout(task.timer);
   task.status = "scheduled";
@@ -239,10 +269,12 @@ function materializeRunForm(task, runAt = new Date()) {
 function validatePayload(body) {
   const errors = [];
   const seatCandidates = normalizeSeatCandidates(body);
+  const schedule = normalizeSchedule(body);
   if (!body || typeof body !== "object") errors.push("请求内容无效");
   if (!body.password?.trim()) errors.push("请输入统一认证密码");
   if (!body.startTime) errors.push("请选择开始抢座时间");
   if (body.startTime && !isClockTime(body.startTime)) errors.push("开始抢座时间无效，请使用 HH:mm");
+  if (schedule.type === "weekly" && schedule.weekdays.length === 0) errors.push("请选择至少一个每周执行日期");
   if (!seatCandidates.length) errors.push("请输入座位号");
   if (!Array.isArray(body.segments) || body.segments.length === 0) errors.push("至少添加一个预约时间段");
   if (Array.isArray(body.segments)) {
@@ -294,6 +326,7 @@ function publicTask(task) {
       mode: task.form.mode,
       visibleBrowser: task.form.visibleBrowser,
       startTime: task.form.startTime,
+      schedule: task.form.schedule || { type: "daily", weekdays: [] },
       segments: task.form.segments,
     },
     logs: task.logs,
@@ -322,9 +355,9 @@ async function executeTask(task, runAt = new Date()) {
   } finally {
     task.finishedAt = new Date().toISOString();
     if (!task.cancelled && task.status !== "paused" && task.recurring) {
-      const nextAt = nextRunAt(task.form.startTime);
+      const nextAt = nextRunAt(task.form.startTime, task.form.schedule);
       scheduleTask(task, nextAt);
-      addLog(task, "info", `已安排下一次每日执行：${nextAt.toLocaleString("zh-CN", { hour12: false })}`);
+      addLog(task, "info", `已安排下一次${scheduleText(task.form.schedule)}：${nextAt.toLocaleString("zh-CN", { hour12: false })}`);
     } else if (!task.cancelled) {
       task.status = task.result?.ok ? "done" : "failed";
     }
@@ -454,7 +487,8 @@ app.post("/api/tasks", requireAuth, (req, res) => {
     res.status(400).json({ ok: false, errors: ["请先绑定学号"] });
     return;
   }
-  const startAt = req.body?.startTime && isClockTime(req.body.startTime) ? nextRunAt(req.body.startTime) : null;
+  const schedule = normalizeSchedule(req.body);
+  const startAt = req.body?.startTime && isClockTime(req.body.startTime) ? nextRunAt(req.body.startTime, schedule) : null;
   const errors = validatePayload(req.body);
   if (errors.length) {
     res.status(400).json({ ok: false, errors });
@@ -472,6 +506,7 @@ app.post("/api/tasks", requireAuth, (req, res) => {
     roomId: req.body.roomId ? String(req.body.roomId) : "",
     mode: req.body.mode === "api" ? "api" : "browser",
     visibleBrowser: req.body.visibleBrowser !== false,
+    schedule,
     segments: req.body.segments.map((segment) => {
       const segmentDate = toDateOnly(segment.date);
       return {
@@ -505,9 +540,10 @@ app.post("/api/tasks", requireAuth, (req, res) => {
 
   tasks.set(task.id, task);
   scheduleTask(task, startAt);
-  addLog(task, "info", `每日任务「${task.name}」已创建，下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 开始`);
-  addLog(task, "info", `每日开始抢座时间：${form.startTime}`);
-  addLog(task, "info", "预约日期规则：按页面选择的日期提交，每日任务按该日期与开始抢座日期的相对天数滚动");
+  addLog(task, "info", `任务「${task.name}」已创建，下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 开始`);
+  addLog(task, "info", `开始抢座时间：${form.startTime}`);
+  addLog(task, "info", `执行规则：${scheduleText(form.schedule)}`);
+  addLog(task, "info", "预约日期规则：按页面选择的日期提交，循环任务按该日期与开始抢座日期的相对天数滚动");
   addLog(task, "info", `候选座位 ${form.seatCandidates.join("、")}，共 ${form.segments.length} 个时间段`);
   res.json({ ok: true, task: publicTask(task) });
 });
@@ -584,7 +620,7 @@ app.post("/api/tasks/:id/pause", requireAuth, (req, res) => {
   if (task.timer) clearTimeout(task.timer);
   task.timer = null;
   task.status = "paused";
-  addLog(task, "warn", `任务「${task.name}」已暂停，每日定时不会执行`);
+  addLog(task, "warn", `任务「${task.name}」已暂停，定时不会执行`);
   bus.emit("task", publicTask(task));
   res.json({ ok: true, task: publicTask(task) });
 });
@@ -603,7 +639,7 @@ app.post("/api/tasks/:id/resume", requireAuth, (req, res) => {
     res.status(409).json({ ok: false, message: "任务正在执行，不能重复恢复" });
     return;
   }
-  const nextAt = nextRunAt(task.form.startTime);
+  const nextAt = nextRunAt(task.form.startTime, task.form.schedule);
   task.status = "scheduled";
   scheduleTask(task, nextAt);
   addLog(task, "info", `任务「${task.name}」已恢复，下一次将在 ${nextAt.toLocaleString("zh-CN", { hour12: false })} 执行`);

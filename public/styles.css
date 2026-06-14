@@ -325,6 +325,35 @@ select:focus {
   min-height: 0;
 }
 
+.schedule-mode {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.weekday-picker {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.weekday-picker label {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.weekday-picker input {
+  width: auto;
+  min-height: 0;
+}
+
 .checkline {
   display: flex;
   align-items: center;
@@ -590,6 +619,10 @@ button:disabled {
   .form-grid,
   .segment-row {
     grid-template-columns: 1fr;
+  }
+
+  .weekday-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .span-2 {
