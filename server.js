@@ -130,10 +130,22 @@ function nowText() {
 }
 
 function addLog(task, level, message) {
-  const entry = { at: nowText(), level, message };
+  const entry = { at: nowText(), ts: Date.now(), level, message };
   task.logs.push(entry);
   if (task.logs.length > 300) task.logs.shift();
   bus.emit("log", { taskId: task.id, entry });
+}
+
+function normalizeTaskName(value, fallback) {
+  const name = String(value || "").trim();
+  return (name || fallback).slice(0, 40);
+}
+
+function nextTaskName(owner) {
+  const usedNames = new Set([...tasks.values()].filter((task) => task.owner === owner).map((task) => task.name));
+  let index = 1;
+  while (usedNames.has(`任务${index}`)) index += 1;
+  return `任务${index}`;
 }
 
 function toDate(dateValue, timeValue) {
@@ -204,7 +216,7 @@ function nextRunAt(startTime) {
 }
 
 function scheduleTask(task, startAt = nextRunAt(task.form.startTime)) {
-  if (task.cancelled) return;
+  if (task.cancelled || task.status === "paused") return;
   if (task.timer) clearTimeout(task.timer);
   task.status = "scheduled";
   task.scheduledAt = startAt.toISOString();
@@ -264,6 +276,7 @@ function validateSeatPreviewPayload(body) {
 function publicTask(task) {
   return {
     id: task.id,
+    name: task.name,
     status: task.status,
     createdAt: task.createdAt,
     scheduledAt: task.scheduledAt,
@@ -289,7 +302,7 @@ function publicTask(task) {
 }
 
 async function executeTask(task, runAt = new Date()) {
-  if (task.cancelled) return;
+  if (task.cancelled || task.status === "paused") return;
   task.status = "running";
   task.timer = null;
   task.startedAt = new Date().toISOString();
@@ -308,7 +321,7 @@ async function executeTask(task, runAt = new Date()) {
     addLog(task, "error", error.message);
   } finally {
     task.finishedAt = new Date().toISOString();
-    if (!task.cancelled && task.recurring) {
+    if (!task.cancelled && task.status !== "paused" && task.recurring) {
       const nextAt = nextRunAt(task.form.startTime);
       scheduleTask(task, nextAt);
       addLog(task, "info", `已安排下一次每日执行：${nextAt.toLocaleString("zh-CN", { hour12: false })}`);
@@ -472,6 +485,7 @@ app.post("/api/tasks", requireAuth, (req, res) => {
 
   const task = {
     id: nanoid(10),
+    name: normalizeTaskName(req.body?.name, nextTaskName(user.username)),
     status: "scheduled",
     createdAt: new Date().toISOString(),
     scheduledAt: startAt.toISOString(),
@@ -491,7 +505,7 @@ app.post("/api/tasks", requireAuth, (req, res) => {
 
   tasks.set(task.id, task);
   scheduleTask(task, startAt);
-  addLog(task, "info", `每日任务已创建，下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 开始`);
+  addLog(task, "info", `每日任务「${task.name}」已创建，下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 开始`);
   addLog(task, "info", `每日开始抢座时间：${form.startTime}`);
   addLog(task, "info", "预约日期规则：按页面选择的日期提交，每日任务按该日期与开始抢座日期的相对天数滚动");
   addLog(task, "info", `候选座位 ${form.seatCandidates.join("、")}，共 ${form.segments.length} 个时间段`);
@@ -551,6 +565,59 @@ app.post("/api/tasks/:id/run-now", requireAuth, (req, res) => {
   const runAt = task.scheduledAt ? new Date(task.scheduledAt) : new Date();
   setTimeout(() => executeTask(task, runAt), 50);
   res.json({ ok: true, task: publicTask(task) });
+});
+
+app.post("/api/tasks/:id/pause", requireAuth, (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) {
+    res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.owner !== req.user.username) {
+    res.status(403).json({ ok: false, message: "无权操作该任务" });
+    return;
+  }
+  if (task.status === "running") {
+    res.status(409).json({ ok: false, message: "任务正在执行，不能暂停当前执行流程" });
+    return;
+  }
+  if (task.timer) clearTimeout(task.timer);
+  task.timer = null;
+  task.status = "paused";
+  addLog(task, "warn", `任务「${task.name}」已暂停，每日定时不会执行`);
+  bus.emit("task", publicTask(task));
+  res.json({ ok: true, task: publicTask(task) });
+});
+
+app.post("/api/tasks/:id/resume", requireAuth, (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) {
+    res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.owner !== req.user.username) {
+    res.status(403).json({ ok: false, message: "无权操作该任务" });
+    return;
+  }
+  if (task.status === "running") {
+    res.status(409).json({ ok: false, message: "任务正在执行，不能重复恢复" });
+    return;
+  }
+  const nextAt = nextRunAt(task.form.startTime);
+  task.status = "scheduled";
+  scheduleTask(task, nextAt);
+  addLog(task, "info", `任务「${task.name}」已恢复，下一次将在 ${nextAt.toLocaleString("zh-CN", { hour12: false })} 执行`);
+  bus.emit("task", publicTask(task));
+  res.json({ ok: true, task: publicTask(task) });
+});
+
+app.delete("/api/logs", requireAuth, (req, res) => {
+  for (const task of tasks.values()) {
+    if (task.owner !== req.user.username) continue;
+    task.logs = [];
+    bus.emit("task", publicTask(task));
+  }
+  res.json({ ok: true });
 });
 
 app.delete("/api/tasks/:id", requireAuth, (req, res) => {

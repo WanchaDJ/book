@@ -11,6 +11,7 @@ const userBar = document.querySelector("#userBar");
 const authStatus = document.querySelector("#authStatus");
 const userInfoText = document.querySelector("#userInfoText");
 const logoutButton = document.querySelector("#logoutButton");
+const clearLogsButton = document.querySelector("#clearLogs");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
@@ -64,6 +65,18 @@ function segmentDisplayDate(task, segment) {
   return dateInput(addDays(scheduledDate, segment.dayOffset));
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => (
+    {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[char]
+  ));
+}
+
 function normalizeSeatList(values) {
   const seen = new Set();
   return values
@@ -113,6 +126,16 @@ function addLog(entry) {
   div.textContent = `[${entry.at || new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${entry.message}`;
   logBox.append(div);
   logBox.scrollTop = logBox.scrollHeight;
+}
+
+function renderLogs() {
+  const entries = tasks
+    .flatMap((task) => (task.logs || []).map((entry) => ({ ...entry, taskName: task.name || task.id })))
+    .sort((a, b) => (a.ts || new Date(a.at).getTime()) - (b.ts || new Date(b.at).getTime()));
+  logBox.innerHTML = "";
+  for (const entry of entries) {
+    addLog({ ...entry, message: `【${entry.taskName}】${entry.message}` });
+  }
 }
 
 function addSegment(values = {}) {
@@ -178,6 +201,7 @@ function statusText(status) {
     done: "已完成",
     failed: "失败",
     cancelled: "已取消",
+    paused: "已暂停",
   }[status] || status;
 }
 
@@ -192,15 +216,19 @@ function renderTasks() {
       const scheduledAt = new Date(task.scheduledAt).toLocaleString("zh-CN", { hour12: false });
       const last = task.runCount ? `；已执行 ${task.runCount} 次${task.lastRunOk === false ? "，上次失败" : ""}` : "";
       const seats = task.form.seatCandidates?.length ? task.form.seatCandidates.join(" → ") : task.form.seatNo;
+      const paused = task.status === "paused";
+      const running = task.status === "running";
+      const nextText = paused ? "已暂停" : `下次执行 ${scheduledAt}`;
       return `
         <article class="task-card" data-id="${task.id}">
           <header>
-            <span>${task.form.seatNo} · ${statusText(task.status)}</span>
-            <span>每日 ${task.form.startTime || "--:--"}</span>
+            <span>${escapeHtml(task.name || task.id)} · ${statusText(task.status)}</span>
+            <span>每日 ${escapeHtml(task.form.startTime || "--:--")}</span>
           </header>
-          <p>下次执行 ${scheduledAt}；账号 ${task.form.account}；候选座位 ${seats}；将预约 ${segments}${last}</p>
+          <p>${escapeHtml(nextText)}；账号 ${escapeHtml(task.form.account)}；候选座位 ${escapeHtml(seats)}；将预约 ${escapeHtml(segments)}${escapeHtml(last)}</p>
           <div class="task-actions">
-            <button class="secondary run-now" ${task.status === "running" ? "disabled" : ""}>立即执行</button>
+            <button class="secondary run-now" ${running || paused ? "disabled" : ""}>立即执行</button>
+            <button class="secondary toggle-pause" ${running ? "disabled" : ""}>${paused ? "恢复执行" : "暂停执行"}</button>
             <button class="trash-task" title="删除任务" aria-label="删除任务">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M3 6h18" />
@@ -231,6 +259,7 @@ async function loadTasks() {
   const data = await response.json();
   tasks = data.tasks || [];
   renderTasks();
+  renderLogs();
 }
 
 async function loadSeatMenu() {
@@ -274,6 +303,7 @@ async function createTask(event) {
   }
 
   const payload = {
+    name: form.taskName.value,
     password: form.password.value,
     startTime: form.startTime.value,
     seatNo: seatCandidates[0],
@@ -295,7 +325,8 @@ async function createTask(event) {
     if (!response.ok || !data.ok) {
       throw new Error((data.errors || [data.message || "创建失败"]).join("；"));
     }
-    addLog({ level: "success", message: `任务已创建：${data.task.id}` });
+    form.taskName.value = "";
+    addLog({ level: "success", message: `任务已创建：${data.task.name || data.task.id}` });
     await loadTasks();
   } catch (error) {
     addLog({ level: "error", message: error.message });
@@ -352,12 +383,25 @@ async function handleTaskAction(event) {
   if (!card) return;
   const id = card.dataset.id;
   if (event.target.classList.contains("run-now")) {
-    await fetch(`/api/tasks/${id}/run-now`, { method: "POST" });
+    await requestTaskAction(`/api/tasks/${id}/run-now`, "立即执行失败");
+    await loadTasks();
+  }
+  if (event.target.classList.contains("toggle-pause")) {
+    const paused = card.querySelector(".toggle-pause").textContent.includes("恢复");
+    await requestTaskAction(`/api/tasks/${id}/${paused ? "resume" : "pause"}`, paused ? "恢复失败" : "暂停失败");
     await loadTasks();
   }
   if (event.target.closest(".trash-task")) {
-    await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+    await requestTaskAction(`/api/tasks/${id}`, "删除失败", "DELETE");
     await loadTasks();
+  }
+}
+
+async function requestTaskAction(url, fallbackMessage, method = "POST") {
+  const response = await fetch(url, { method });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    addLog({ level: "error", message: data.message || fallbackMessage });
   }
 }
 
@@ -373,16 +417,21 @@ function connectEvents() {
   };
   events.onmessage = (event) => {
     const data = JSON.parse(event.data);
-    if (data.type === "log") addLog(data.entry);
+    if (data.type === "log") {
+      const task = tasks.find((item) => item.id === data.taskId);
+      addLog({ ...data.entry, message: `【${task?.name || data.taskId}】${data.entry.message}` });
+    }
     if (data.type === "task") {
       const index = tasks.findIndex((task) => task.id === data.task.id);
       if (index >= 0) tasks[index] = data.task;
       else tasks.unshift(data.task);
       renderTasks();
+      renderLogs();
     }
     if (data.type === "task-deleted") {
       tasks = tasks.filter((task) => task.id !== data.taskId);
       renderTasks();
+      renderLogs();
     }
   };
 }
@@ -458,6 +507,18 @@ async function logout() {
   addLog({ level: "warn", message: "已退出系统账号" });
 }
 
+async function clearLogs() {
+  if (!currentUser) return;
+  const response = await fetch("/api/logs", { method: "DELETE" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    addLog({ level: "error", message: data.message || "清空日志失败" });
+    return;
+  }
+  tasks = tasks.map((task) => ({ ...task, logs: [] }));
+  renderLogs();
+}
+
 function tickClock() {
   document.querySelector("#clock").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
 }
@@ -471,6 +532,7 @@ form.addEventListener("submit", createTask);
 loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);
 logoutButton.addEventListener("click", logout);
+clearLogsButton.addEventListener("click", clearLogs);
 
 const start = new Date(Date.now() + 5 * 60 * 1000);
 form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;

@@ -455,6 +455,7 @@ button:disabled {
   gap: 8px;
   margin-top: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .task-actions button {
@@ -501,6 +502,18 @@ button:disabled {
   font-family: "Consolas", monospace;
   font-size: 12px;
   line-height: 1.65;
+}
+
+.log-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.log-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
 }
 
 .log-entry {

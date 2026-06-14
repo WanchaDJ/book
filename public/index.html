@@ -55,6 +55,10 @@
 
         <form id="taskForm" class="form-grid">
           <div class="field span-2">
+            <label for="taskName">任务名称</label>
+            <input id="taskName" name="taskName" maxlength="40" placeholder="不填则自动命名为任务1、任务2、任务3" />
+          </div>
+          <div class="field span-2">
             <label for="account">已绑定学号</label>
             <input id="account" name="account" readonly required placeholder="请先登录并绑定学号" />
           </div>
@@ -126,6 +130,9 @@
         </div>
         <div class="task-list" id="taskList"></div>
         <div class="log-box" id="logBox"></div>
+        <div class="log-actions">
+          <button type="button" class="secondary" id="clearLogs">清空日志</button>
+        </div>
       </section>
     </main>
 
