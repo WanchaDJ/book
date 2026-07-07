@@ -273,6 +273,24 @@ async function apiPost(context, userInfo, path, payload, action) {
   return readApiResponse(response, action);
 }
 
+async function fetchLoggedInUserInfo(context) {
+  const data = await apiGet(context, {}, "auth/userInfo", {}, "读取用户信息");
+  if (data?.code !== 0 || !data.data) {
+    throw new Error(data?.message || "没有从登录会话中取得用户信息");
+  }
+  return data.data;
+}
+
+async function clearOfficialSession(context, page) {
+  await context.clearCookies().catch(() => {});
+  await page
+    .evaluate(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    })
+    .catch(() => {});
+}
+
 function officialAccNo(userInfo, form) {
   return String(userInfo?.accNo || userInfo?.logonName || userInfo?.account || form.account || "").trim();
 }
@@ -285,12 +303,17 @@ async function getLoggedInUserInfo(context, page, form, log) {
   }
 
   log("info", "正在从登录会话读取用户信息");
-  const data = await apiGet(context, {}, "auth/userInfo", {}, "读取用户信息");
-  if (data?.code !== 0 || !data.data) {
-    throw new Error(data?.message || "没有从登录会话中取得用户信息");
+  try {
+    userInfo = await fetchLoggedInUserInfo(context);
+  } catch (error) {
+    log("warn", `官网登录态已失效：${error.message}`);
+    log("info", "正在清理官网会话并重新登录");
+    await clearOfficialSession(context, page);
+    await login(page, form, log);
+    log("info", "重新登录后再次读取用户信息");
+    userInfo = await fetchLoggedInUserInfo(context);
   }
 
-  userInfo = data.data;
   await page
     .evaluate((info) => {
       window.sessionStorage.setItem("userInfo", JSON.stringify(info));
