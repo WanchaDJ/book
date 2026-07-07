@@ -1,8 +1,9 @@
 import express from "express";
 import { nanoid } from "nanoid";
 import { EventEmitter } from "node:events";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { resolve } from "node:path";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
 import { authenticateUser, bindStudentId, createUser, deleteUser, getUser, listUsers } from "./src/authStore.js";
 
@@ -17,6 +18,9 @@ const serverMode = {
 const sessionSecret = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
 const adminUsername = process.env.ADMIN_USERNAME || "";
 const adminPassword = process.env.ADMIN_PASSWORD || "";
+const dataDir = resolve(process.env.DATA_DIR || "data");
+const tasksFile = resolve(process.env.TASKS_FILE || `${dataDir}/tasks.json`);
+let persistenceReady = false;
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
@@ -129,11 +133,140 @@ function nowText() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
 }
 
+function ensureTasksStore() {
+  mkdirSync(dirname(tasksFile), { recursive: true });
+  if (!existsSync(tasksFile)) writeFileSync(tasksFile, JSON.stringify({ tasks: [] }, null, 2));
+}
+
+function taskSecretKey() {
+  return createHash("sha256").update(sessionSecret).digest();
+}
+
+function encryptTaskPassword(password) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", taskSecretKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(password || ""), "utf8"), cipher.final()]);
+  return {
+    v: 1,
+    alg: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: encrypted.toString("base64url"),
+  };
+}
+
+function decryptTaskPassword(secret) {
+  if (!secret || secret.alg !== "aes-256-gcm" || secret.v !== 1) {
+    throw new Error("任务密码格式无效");
+  }
+  const decipher = createDecipheriv("aes-256-gcm", taskSecretKey(), Buffer.from(secret.iv, "base64url"));
+  decipher.setAuthTag(Buffer.from(secret.tag, "base64url"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(secret.data, "base64url")),
+    decipher.final(),
+  ]);
+  return decrypted.toString("utf8");
+}
+
+function serializeTask(task) {
+  const { timer: _timer, cancelled: _cancelled, form, ...rest } = task;
+  const { password: formPassword, ...publicForm } = form;
+  return {
+    ...rest,
+    cancelled: false,
+    form: {
+      ...publicForm,
+      passwordSecret: encryptTaskPassword(formPassword),
+    },
+    logs: (task.logs || []).slice(-300),
+  };
+}
+
+function deserializeTask(savedTask) {
+  const { form, ...rest } = savedTask;
+  const { passwordSecret, ...restForm } = form;
+  return {
+    ...rest,
+    status: savedTask.status === "paused" ? "paused" : "scheduled",
+    scheduledAt: savedTask.scheduledAt || null,
+    startedAt: null,
+    finishedAt: savedTask.finishedAt || null,
+    cancelled: false,
+    form: {
+      ...restForm,
+      password: decryptTaskPassword(passwordSecret),
+      schedule: restForm.schedule || { type: "daily", weekdays: [] },
+    },
+    logs: Array.isArray(savedTask.logs) ? savedTask.logs.slice(-300) : [],
+    result: savedTask.result || null,
+    timer: null,
+  };
+}
+
+function savePersistentTasks() {
+  if (!persistenceReady) return;
+  try {
+    ensureTasksStore();
+    const store = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      tasks: [...tasks.values()].filter((task) => !task.cancelled).map(serializeTask),
+    };
+    writeFileSync(tasksFile, JSON.stringify(store, null, 2));
+  } catch (error) {
+    console.error(`保存任务存档失败：${error.message}`);
+  }
+}
+
+function restorePersistentTasks() {
+  const savedTasks = readPersistentTasks();
+  let failedCount = 0;
+
+  for (const savedTask of savedTasks) {
+    try {
+      const task = deserializeTask(savedTask);
+      if (!task.id || !task.owner || !task.form?.startTime) continue;
+      if (!getUser(task.owner)) continue;
+
+      tasks.set(task.id, task);
+      if (task.status === "paused") {
+        addLog(task, "info", "服务重启后已恢复任务，当前保持暂停状态");
+        continue;
+      }
+
+      const nextAt = nextRunAt(task.form.startTime, task.form.schedule);
+      scheduleTask(task, nextAt);
+      addLog(task, "info", `服务重启后已恢复任务，下一次将在 ${nextAt.toLocaleString("zh-CN", { hour12: false })} 执行`);
+    } catch (error) {
+      failedCount += 1;
+      console.error(`恢复任务失败：${error.message}`);
+    }
+  }
+
+  persistenceReady = true;
+  if (failedCount === 0) savePersistentTasks();
+  if (savedTasks.length) {
+    console.log(`已从 ${tasksFile} 恢复 ${tasks.size}/${savedTasks.length} 个任务`);
+  }
+}
+
+function readPersistentTasks() {
+  ensureTasksStore();
+  try {
+    const data = JSON.parse(readFileSync(tasksFile, "utf8"));
+    return Array.isArray(data.tasks) ? data.tasks : [];
+  } catch (error) {
+    console.error(`读取任务存档失败：${error.message}`);
+    return [];
+  }
+}
+
 function addLog(task, level, message) {
   const entry = { at: nowText(), ts: Date.now(), level, message };
   task.logs.push(entry);
   if (task.logs.length > 300) task.logs.shift();
   bus.emit("log", { taskId: task.id, entry });
+  savePersistentTasks();
 }
 
 function normalizeTaskName(value, fallback) {
@@ -252,6 +385,7 @@ function scheduleTask(task, startAt = nextRunAt(task.form.startTime, task.form.s
   task.scheduledAt = startAt.toISOString();
   const delay = Math.max(0, startAt.getTime() - Date.now());
   task.timer = setTimeout(() => executeTask(task, startAt), delay);
+  savePersistentTasks();
 }
 
 function materializeRunForm(task, runAt = new Date()) {
@@ -456,6 +590,7 @@ app.delete("/api/admin/users/:username", requireAdmin, (req, res) => {
       tasks.delete(task.id);
       bus.emit("task-deleted", { taskId: task.id, owner: task.owner });
     }
+    savePersistentTasks();
     deleteUser(username);
     res.json({ ok: true, username });
   } catch (error) {
@@ -653,6 +788,7 @@ app.delete("/api/logs", requireAuth, (req, res) => {
     task.logs = [];
     bus.emit("task", publicTask(task));
   }
+  savePersistentTasks();
   res.json({ ok: true });
 });
 
@@ -670,6 +806,7 @@ app.delete("/api/tasks/:id", requireAuth, (req, res) => {
   task.timer = null;
   task.cancelled = true;
   tasks.delete(task.id);
+  savePersistentTasks();
   bus.emit("task-deleted", { taskId: task.id, owner: task.owner });
   res.json({ ok: true, taskId: task.id });
 });
@@ -701,6 +838,8 @@ app.get("/api/events", requireAuth, (req, res) => {
     bus.off("task-deleted", onTaskDeleted);
   });
 });
+
+restorePersistentTasks();
 
 app.listen(port, () => {
   console.log(`Library seat reserver: http://localhost:${port}`);
