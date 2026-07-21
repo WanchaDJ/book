@@ -235,7 +235,7 @@ function validateSegments(segments) {
   segments.forEach((segment, index) => {
     const diff = minutes(segment);
     if (!Number.isFinite(diff) || diff <= 0) errors.push(`第 ${index + 1} 段结束时间必须晚于开始时间`);
-    if (diff > 180) errors.push(`第 ${index + 1} 段超过 3 小时`);
+    if (diff > 16 * 60) errors.push(`第 ${index + 1} 段超过 16 小时`);
   });
   return errors;
 }

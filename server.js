@@ -423,7 +423,7 @@ function validatePayload(body) {
       }
       const minutes = minutesBetween(begin, end);
       if (minutes <= 0) errors.push(`${prefix} 结束时间必须晚于开始时间`);
-      if (minutes > 180) errors.push(`${prefix} 超过 3 小时限制`);
+      if (minutes > 16 * 60) errors.push(`${prefix} 超过 16 小时限制`);
     });
   }
   return errors;
