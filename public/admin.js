@@ -4,11 +4,21 @@ const loginForm = document.querySelector("#adminLoginForm");
 const createUserForm = document.querySelector("#createUserForm");
 const logoutButton = document.querySelector("#adminLogoutButton");
 const managedUsersEl = document.querySelector("#managedUsers");
+const managedTasksEl = document.querySelector("#managedTasks");
 const adminInfoText = document.querySelector("#adminInfoText");
 const loginMessage = document.querySelector("#adminLoginMessage");
 const adminMessage = document.querySelector("#adminMessage");
+const adminTasksMessage = document.querySelector("#adminTasksMessage");
+const accountsView = document.querySelector("#adminAccountsView");
+const tasksView = document.querySelector("#adminTasksView");
+const featureBar = document.querySelector(".admin-feature-bar");
+const accountCount = document.querySelector("#accountCount");
+const taskCount = document.querySelector("#taskCount");
+const taskSummary = document.querySelector("#taskSummary");
+const refreshTasksButton = document.querySelector("#refreshAdminTasks");
 
 let currentAdmin = null;
+let currentView = "accounts";
 
 function setMessage(element, message = "", level = "") {
   element.textContent = message;
@@ -20,6 +30,17 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function dateInput(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function escapeHtml(value) {
@@ -42,7 +63,19 @@ function renderSession() {
   adminInfoText.textContent = loggedIn ? `当前管理员：${currentAdmin.username}` : "";
 }
 
+function setView(view) {
+  currentView = view === "tasks" ? "tasks" : "accounts";
+  accountsView.classList.toggle("hidden", currentView !== "accounts");
+  tasksView.classList.toggle("hidden", currentView !== "tasks");
+  for (const button of featureBar.querySelectorAll("[data-admin-view]")) {
+    const active = button.dataset.adminView === currentView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+}
+
 function renderUsers(users = []) {
+  accountCount.textContent = String(users.length);
   if (!users.length) {
     managedUsersEl.innerHTML = `<div class="empty">暂无系统账号</div>`;
     return;
@@ -70,6 +103,107 @@ function renderUsers(users = []) {
     .join("");
 }
 
+function statusText(status) {
+  return {
+    scheduled: "等待中",
+    running: "执行中",
+    done: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+    paused: "已暂停",
+  }[status] || status || "未知";
+}
+
+function scheduleText(schedule = { type: "daily", weekdays: [] }) {
+  if (schedule.type !== "weekly" || !schedule.weekdays?.length) return "每日执行";
+  const labels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return `每周 ${schedule.weekdays.map((day) => labels[day]).join("、")}`;
+}
+
+function segmentDate(task, segment) {
+  if (typeof segment.dayOffset !== "number" || !task.scheduledAt) return segment.date || "-";
+  return dateInput(addDays(new Date(task.scheduledAt), segment.dayOffset));
+}
+
+function renderSeatCandidates(task) {
+  const candidates = task.form.seatCandidates?.length
+    ? task.form.seatCandidates
+    : [task.form.seatNo].filter(Boolean);
+  if (!candidates.length) return `<span class="muted-value">未填写座位</span>`;
+  return candidates
+    .map(
+      (seat, index) => `<span class="seat-tag ${index === 0 ? "primary-seat" : ""}">
+        ${index === 0 ? "主座位" : `备选 ${index}`} <strong>${escapeHtml(seat)}</strong>
+      </span>`,
+    )
+    .join("");
+}
+
+function renderTask(task) {
+  const segments = task.form.segments?.length
+    ? task.form.segments.map((segment) => `${segmentDate(task, segment)} ${segment.begin}-${segment.end}`).join("；")
+    : "未设置预约时间段";
+  const nextRun = task.status === "paused" ? "任务已暂停" : `下次执行 ${formatDate(task.scheduledAt)}`;
+  const runResult = task.runCount
+    ? `已执行 ${task.runCount} 次${task.lastRunOk === false ? "，上次失败" : ""}`
+    : "尚未执行";
+  const statusClass = ["scheduled", "running", "done", "failed", "cancelled", "paused"].includes(task.status)
+    ? task.status
+    : "unknown";
+
+  return `
+    <article class="admin-task-row">
+      <header>
+        <div>
+          <strong>${escapeHtml(task.name || task.id)}</strong>
+          <span class="admin-task-id">${escapeHtml(task.id)}</span>
+        </div>
+        <span class="task-status ${statusClass}">${escapeHtml(statusText(task.status))}</span>
+      </header>
+      <div class="seat-chain" aria-label="候选座位">${renderSeatCandidates(task)}</div>
+      <dl class="admin-task-details">
+        <div><dt>执行规则</dt><dd>${escapeHtml(scheduleText(task.form.schedule))}，${escapeHtml(task.form.startTime || "-")} 开始抢座</dd></div>
+        <div><dt>预约时段</dt><dd>${escapeHtml(segments)}</dd></div>
+        <div><dt>运行状态</dt><dd>${escapeHtml(nextRun)}；${escapeHtml(runResult)}</dd></div>
+      </dl>
+    </article>
+  `;
+}
+
+function renderTasks(users = [], updatedAt = null) {
+  const totalTasks = users.reduce((sum, user) => sum + user.tasks.length, 0);
+  const activeTasks = users.reduce(
+    (sum, user) => sum + user.tasks.filter((task) => ["scheduled", "running"].includes(task.status)).length,
+    0,
+  );
+  taskCount.textContent = String(totalTasks);
+  taskSummary.textContent = `${users.length} 个用户，${totalTasks} 个任务，其中 ${activeTasks} 个正在等待或执行${updatedAt ? `；更新于 ${formatDate(updatedAt)}` : ""}`;
+
+  if (!users.length) {
+    managedTasksEl.innerHTML = `<div class="empty">暂无系统账号和任务</div>`;
+    return;
+  }
+
+  managedTasksEl.innerHTML = users
+    .map(
+      (user) => `
+        <section class="admin-task-user">
+          <header class="admin-task-user-head">
+            <div>
+              <h3>${escapeHtml(user.username)}</h3>
+              <span>绑定学号：${escapeHtml(user.boundStudentId || "未绑定")}</span>
+            </div>
+            <strong>${user.tasks.length} 个任务</strong>
+          </header>
+          <div class="admin-task-list">
+            ${user.tasks.length ? user.tasks.map(renderTask).join("") : `<div class="empty compact-empty">该用户暂无任务</div>`}
+          </div>
+        </section>
+      `,
+    )
+    .join("");
+}
+
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
@@ -88,12 +222,26 @@ async function loadUsers() {
   renderUsers(data.users || []);
 }
 
+async function loadTasks() {
+  setMessage(adminTasksMessage);
+  refreshTasksButton.disabled = true;
+  try {
+    const data = await requestJson("/api/admin/tasks");
+    renderTasks(data.users || [], data.updatedAt);
+  } catch (error) {
+    setMessage(adminTasksMessage, error.message, "error");
+    throw error;
+  } finally {
+    refreshTasksButton.disabled = false;
+  }
+}
+
 async function loadAdmin() {
   try {
     const data = await requestJson("/api/admin/me");
     currentAdmin = data.admin || null;
     renderSession();
-    if (currentAdmin) await loadUsers();
+    if (currentAdmin) await Promise.all([loadUsers(), loadTasks()]);
   } catch (error) {
     currentAdmin = null;
     renderSession();
@@ -118,7 +266,7 @@ async function login(event) {
     document.querySelector("#adminPassword").value = "";
     renderSession();
     setMessage(adminMessage, "管理员已登录", "success");
-    await loadUsers();
+    await Promise.all([loadUsers(), loadTasks()]);
   } catch (error) {
     setMessage(loginMessage, error.message, "error");
   } finally {
@@ -131,6 +279,8 @@ async function logout() {
   currentAdmin = null;
   renderSession();
   renderUsers([]);
+  renderTasks([]);
+  setView("accounts");
   setMessage(loginMessage, "已退出管理员账号", "success");
 }
 
@@ -149,7 +299,7 @@ async function createUser(event) {
     });
     createUserForm.reset();
     setMessage(adminMessage, `已生成账号 ${data.user.username}，初始密码：${data.user.initialPassword}`, "success");
-    await loadUsers();
+    await Promise.all([loadUsers(), loadTasks()]);
   } catch (error) {
     setMessage(adminMessage, error.message, "error");
   } finally {
@@ -169,7 +319,7 @@ async function handleUserAction(event) {
   try {
     await requestJson(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" });
     setMessage(adminMessage, `已删除账号 ${username}`, "success");
-    await loadUsers();
+    await Promise.all([loadUsers(), loadTasks()]);
   } catch (error) {
     button.disabled = false;
     setMessage(adminMessage, error.message, "error");
@@ -180,6 +330,14 @@ loginForm.addEventListener("submit", login);
 createUserForm.addEventListener("submit", createUser);
 logoutButton.addEventListener("click", logout);
 managedUsersEl.addEventListener("click", handleUserAction);
+featureBar.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-admin-view]");
+  if (!button) return;
+  setView(button.dataset.adminView);
+  if (currentView === "tasks") loadTasks().catch(() => {});
+});
+refreshTasksButton.addEventListener("click", () => loadTasks().catch(() => {}));
 
 renderSession();
+setView("accounts");
 loadAdmin();

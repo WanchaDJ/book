@@ -34,8 +34,8 @@
       <section class="panel admin-workspace hidden" id="adminWorkspace">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Accounts</p>
-            <h1>账号管理</h1>
+            <p class="eyebrow">Control Center</p>
+            <h1>系统管理</h1>
             <p id="adminInfoText"></p>
           </div>
           <div class="admin-top-actions">
@@ -44,28 +44,51 @@
           </div>
         </div>
 
-        <form id="createUserForm" class="admin-create-form">
-          <div class="field">
-            <label for="newUsername">系统账号</label>
-            <input id="newUsername" required placeholder="3-32 位字母、数字、下划线或横线" />
-          </div>
-          <div class="field">
-            <label for="newPassword">系统密码</label>
-            <input id="newPassword" placeholder="留空自动生成" />
-          </div>
-          <button type="submit" class="primary">生成账号</button>
-        </form>
+        <nav class="admin-feature-bar" aria-label="管理功能">
+          <button type="button" class="admin-feature-tab active" data-admin-view="accounts" aria-selected="true">
+            账号管理 <span id="accountCount">0</span>
+          </button>
+          <button type="button" class="admin-feature-tab" data-admin-view="tasks" aria-selected="false">
+            用户任务 <span id="taskCount">0</span>
+          </button>
+        </nav>
 
-        <div class="admin-message" id="adminMessage"></div>
+        <div class="admin-view" id="adminAccountsView">
+          <form id="createUserForm" class="admin-create-form">
+            <div class="field">
+              <label for="newUsername">系统账号</label>
+              <input id="newUsername" required placeholder="3-32 位字母、数字、下划线或横线" />
+            </div>
+            <div class="field">
+              <label for="newPassword">系统密码</label>
+              <input id="newPassword" placeholder="留空自动生成" />
+            </div>
+            <button type="submit" class="primary">生成账号</button>
+          </form>
 
-        <div class="managed-users-head">
-          <span>系统账号</span>
-          <span>初始密码</span>
-          <span>绑定学号</span>
-          <span>创建时间</span>
-          <span></span>
+          <div class="admin-message" id="adminMessage"></div>
+
+          <div class="managed-users-head">
+            <span>系统账号</span>
+            <span>初始密码</span>
+            <span>绑定学号</span>
+            <span>创建时间</span>
+            <span></span>
+          </div>
+          <div class="managed-users admin-users-list" id="managedUsers"></div>
         </div>
-        <div class="managed-users admin-users-list" id="managedUsers"></div>
+
+        <section class="admin-view hidden" id="adminTasksView">
+          <div class="admin-view-head">
+            <div>
+              <h2>全部用户任务</h2>
+              <p id="taskSummary">正在读取任务...</p>
+            </div>
+            <button type="button" class="secondary admin-refresh" id="refreshAdminTasks">刷新任务</button>
+          </div>
+          <div class="admin-message" id="adminTasksMessage"></div>
+          <div class="admin-task-users" id="managedTasks"></div>
+        </section>
       </section>
     </main>
 

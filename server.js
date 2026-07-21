@@ -468,6 +468,33 @@ function publicTask(task) {
   };
 }
 
+function adminTaskSummary(task) {
+  const seatCandidates = Array.isArray(task.form?.seatCandidates) && task.form.seatCandidates.length
+    ? task.form.seatCandidates
+    : [task.form?.seatNo].filter(Boolean);
+  return {
+    id: task.id,
+    owner: task.owner,
+    name: task.name,
+    status: task.status,
+    createdAt: task.createdAt,
+    scheduledAt: task.scheduledAt,
+    startedAt: task.startedAt,
+    finishedAt: task.finishedAt,
+    runCount: task.runCount,
+    lastRunOk: task.lastRunOk,
+    form: {
+      account: task.form?.account || "",
+      seatNo: task.form?.seatNo || seatCandidates[0] || "",
+      seatCandidates,
+      roomId: task.form?.roomId || "",
+      startTime: task.form?.startTime || "",
+      schedule: task.form?.schedule || { type: "daily", weekdays: [] },
+      segments: Array.isArray(task.form?.segments) ? task.form.segments : [],
+    },
+  };
+}
+
 async function executeTask(task, runAt = new Date()) {
   if (task.cancelled || task.status === "paused") return;
   task.status = "running";
@@ -567,6 +594,19 @@ app.post("/api/admin/logout", (_req, res) => {
 
 app.get("/api/admin/users", requireAdmin, (_req, res) => {
   res.json({ ok: true, users: listUsers() });
+});
+
+app.get("/api/admin/tasks", requireAdmin, (_req, res) => {
+  const allTasks = [...tasks.values()]
+    .filter((task) => !task.cancelled)
+    .map(adminTaskSummary)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  const users = listUsers().map((user) => ({
+    username: user.username,
+    boundStudentId: user.boundStudentId,
+    tasks: allTasks.filter((task) => task.owner.toLowerCase() === user.username.toLowerCase()),
+  }));
+  res.json({ ok: true, updatedAt: new Date().toISOString(), users });
 });
 
 app.post("/api/admin/users", requireAdmin, (req, res) => {

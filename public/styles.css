@@ -166,6 +166,77 @@ h2 {
   justify-content: flex-end;
 }
 
+.admin-feature-bar {
+  margin-top: 24px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef3ef;
+}
+
+.admin-feature-tab {
+  flex: 1;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.admin-feature-tab span {
+  min-width: 24px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(98, 114, 105, 0.14);
+  font-size: 12px;
+}
+
+.admin-feature-tab.active {
+  color: var(--ink);
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(35, 48, 42, 0.1);
+}
+
+.admin-feature-tab.active span {
+  color: #fff;
+  background: var(--accent);
+}
+
+.admin-view {
+  margin-top: 20px;
+}
+
+.admin-view .admin-create-form {
+  margin-top: 0;
+}
+
+.admin-view-head,
+.admin-task-user-head,
+.admin-task-row > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-view-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-refresh {
+  min-height: 38px;
+}
+
 .text-link {
   color: var(--accent);
   font-size: 13px;
@@ -252,6 +323,179 @@ h2 {
   border-radius: 5px;
   background: #eef3ef;
   color: var(--ink);
+}
+
+.admin-task-users {
+  display: grid;
+  gap: 26px;
+}
+
+.admin-task-user {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.admin-task-user:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.admin-task-user-head {
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.admin-task-user-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.admin-task-user-head span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-task-user-head > strong {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.admin-task-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-task-row {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.admin-task-row > header {
+  align-items: center;
+}
+
+.admin-task-row > header > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-task-id {
+  color: var(--muted);
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+}
+
+.task-status {
+  flex: 0 0 auto;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: #edf0ee;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.task-status.scheduled,
+.task-status.running {
+  color: var(--success);
+  background: #e8f3ed;
+}
+
+.task-status.paused {
+  color: #8a5a00;
+  background: #fff3d6;
+}
+
+.task-status.failed,
+.task-status.cancelled {
+  color: var(--danger);
+  background: #fff0ee;
+}
+
+.seat-chain {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.seat-tag {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #d8ded9;
+  border-radius: 6px;
+  color: var(--muted);
+  background: #f4f6f4;
+  font-size: 12px;
+}
+
+.seat-tag strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.seat-tag.primary-seat {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+
+.seat-tag.primary-seat strong {
+  color: #fff;
+}
+
+.muted-value {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-task-details {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.admin-task-details > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.admin-task-details dt,
+.admin-task-details dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.admin-task-details dt {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.admin-task-details dd {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+.compact-empty {
+  padding: 12px;
 }
 
 .hidden {
@@ -600,6 +844,11 @@ button:disabled {
   .managed-user code {
     grid-column: 1 / -1;
   }
+
+  .admin-task-details > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
 }
 
 @media (max-width: 620px) {
@@ -631,5 +880,14 @@ button:disabled {
 
   .masthead {
     flex-direction: column;
+  }
+
+  .admin-view-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-refresh {
+    width: 100%;
   }
 }
