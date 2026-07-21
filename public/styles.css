@@ -141,6 +141,27 @@ h2 {
   gap: 16px;
 }
 
+.edit-notice {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid rgba(20, 108, 95, 0.32);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  background: #edf5f1;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.edit-notice button {
+  flex: 0 0 auto;
+  min-height: 34px;
+}
+
 .auth-grid {
   margin-top: 16px;
   display: grid;
@@ -706,6 +727,20 @@ button:disabled {
   border-radius: 8px;
   padding: 12px;
   background: #fff;
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.task-card:hover,
+.task-card:focus-visible {
+  border-color: rgba(20, 108, 95, 0.55);
+  box-shadow: 0 5px 16px rgba(35, 48, 42, 0.09);
+  outline: none;
+}
+
+.task-card.editing {
+  border-color: var(--accent);
+  box-shadow: inset 4px 0 0 var(--accent);
 }
 
 .task-card header {
@@ -879,6 +914,11 @@ button:disabled {
   }
 
   .masthead {
+    flex-direction: column;
+  }
+
+  .edit-notice {
+    align-items: stretch;
     flex-direction: column;
   }
 

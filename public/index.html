@@ -54,6 +54,10 @@
         </div>
 
         <form id="taskForm" class="form-grid">
+          <div class="edit-notice span-2 hidden" id="taskEditNotice">
+            <span id="taskEditText"></span>
+            <button type="button" class="ghost" id="cancelTaskEdit">取消修改</button>
+          </div>
           <div class="field span-2">
             <label for="taskName">任务名称</label>
             <input id="taskName" name="taskName" maxlength="40" autocomplete="off" placeholder="不填则自动命名为任务1、任务2、任务3" />
@@ -63,7 +67,7 @@
             <input id="account" name="account" readonly required placeholder="请先登录并绑定学号" />
           </div>
           <div class="field span-2">
-            <label for="password">统一认证密码</label>
+            <label for="password" id="passwordLabel">统一认证密码</label>
             <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="统一身份认证密码" />
           </div>
 
@@ -129,7 +133,7 @@
           </div>
 
           <div class="actions span-2">
-            <button type="submit" class="primary">创建定时任务</button>
+            <button type="submit" class="primary" id="taskSubmitButton">创建定时任务</button>
             <button type="button" class="secondary" id="previewSeat">检查座位匹配</button>
             <button type="button" class="secondary" id="refreshMenu">刷新阅览区</button>
           </div>

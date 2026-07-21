@@ -723,6 +723,81 @@ app.post("/api/tasks", requireAuth, (req, res) => {
   res.json({ ok: true, task: publicTask(task) });
 });
 
+app.put("/api/tasks/:id", requireAuth, (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) {
+    res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.owner !== req.user.username) {
+    res.status(403).json({ ok: false, message: "无权修改该任务" });
+    return;
+  }
+  if (task.status === "running") {
+    res.status(409).json({ ok: false, message: "任务正在执行，暂时不能修改" });
+    return;
+  }
+
+  const user = currentUser(req);
+  if (!user.boundStudentId) {
+    res.status(400).json({ ok: false, errors: ["请先绑定学号"] });
+    return;
+  }
+
+  const body = req.body || {};
+  const schedule = normalizeSchedule(body);
+  const startAt = body.startTime && isClockTime(body.startTime) ? nextRunAt(body.startTime, schedule) : null;
+  const nextPassword = typeof body.password === "string" && body.password.trim()
+    ? body.password
+    : task.form.password;
+  const errors = validatePayload({ ...body, password: nextPassword });
+  if (errors.length) {
+    res.status(400).json({ ok: false, errors });
+    return;
+  }
+
+  const wasPaused = task.status === "paused";
+  const runDate = new Date(startAt.getFullYear(), startAt.getMonth(), startAt.getDate());
+  const seatCandidates = normalizeSeatCandidates(body);
+  if (task.timer) clearTimeout(task.timer);
+  task.timer = null;
+  task.name = normalizeTaskName(body.name, task.name || nextTaskName(user.username));
+  task.form = {
+    account: user.boundStudentId,
+    password: nextPassword,
+    startTime: body.startTime,
+    seatNo: seatCandidates[0],
+    seatCandidates,
+    roomId: body.roomId ? String(body.roomId) : "",
+    mode: body.mode === "api" ? "api" : "browser",
+    visibleBrowser: body.visibleBrowser !== false,
+    schedule,
+    segments: body.segments.map((segment) => {
+      const segmentDate = toDateOnly(segment.date);
+      return {
+        date: segment.date,
+        dayOffset: daysBetween(runDate, segmentDate),
+        begin: segment.begin,
+        end: segment.end,
+      };
+    }),
+  };
+
+  if (wasPaused) {
+    task.status = "paused";
+    task.scheduledAt = startAt.toISOString();
+  } else {
+    scheduleTask(task, startAt);
+  }
+  addLog(
+    task,
+    "info",
+    `任务配置已修改；候选座位 ${seatCandidates.join("、")}；${wasPaused ? "当前保持暂停" : `下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 执行`}`,
+  );
+  bus.emit("task", publicTask(task));
+  res.json({ ok: true, task: publicTask(task) });
+});
+
 app.post("/api/seat-preview", requireAuth, async (req, res) => {
   const user = currentUser(req);
   if (!user.boundStudentId) {

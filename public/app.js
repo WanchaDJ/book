@@ -13,12 +13,20 @@ const userInfoText = document.querySelector("#userInfoText");
 const logoutButton = document.querySelector("#logoutButton");
 const clearLogsButton = document.querySelector("#clearLogs");
 const weekdayPicker = document.querySelector("#weekdayPicker");
+const controlPanel = document.querySelector(".control-panel");
+const taskEditNotice = document.querySelector("#taskEditNotice");
+const taskEditText = document.querySelector("#taskEditText");
+const cancelTaskEditButton = document.querySelector("#cancelTaskEdit");
+const taskSubmitButton = document.querySelector("#taskSubmitButton");
+const passwordLabel = document.querySelector("#passwordLabel");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
 let currentUser = null;
 let events = null;
 let taskNameTouched = false;
+let editingTaskId = null;
+let editingPasswordTouched = false;
 
 function pad(value) {
   return String(value).padStart(2, "0");
@@ -128,6 +136,83 @@ function collectSeatCandidates() {
 function resetTaskNameField() {
   form.taskName.value = "";
   taskNameTouched = false;
+}
+
+function setDefaultStartTime() {
+  const start = new Date(Date.now() + 5 * 60 * 1000);
+  form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
+}
+
+function setTaskEditorMode(task = null) {
+  editingTaskId = task?.id || null;
+  editingPasswordTouched = false;
+  const editing = Boolean(editingTaskId);
+  taskEditNotice.classList.toggle("hidden", !editing);
+  taskEditText.textContent = editing ? `正在修改：${task.name || task.id}` : "";
+  taskSubmitButton.textContent = editing ? "保存任务修改" : "创建定时任务";
+  form.password.required = !editing;
+  passwordLabel.textContent = editing ? "统一认证密码（不修改则保留）" : "统一认证密码";
+  form.password.placeholder = editing ? "不填写新密码则保留原密码" : "统一身份认证密码";
+  renderTasks();
+}
+
+function resetTaskFormForCreate({ preservePassword = true } = {}) {
+  const password = preservePassword ? form.password.value : "";
+  form.reset();
+  form.account.value = currentUser?.boundStudentId || "";
+  form.password.value = password;
+  setDefaultStartTime();
+  segmentsEl.innerHTML = "";
+  lastDefaultSegmentDate = defaultSegmentDate();
+  addSegment();
+  updateScheduleControls();
+  resetTaskNameField();
+  setTaskEditorMode();
+}
+
+function ensureRoomOption(roomId) {
+  if (!roomId || [...roomSelect.options].some((option) => option.value === roomId)) return;
+  roomSelect.add(new Option(`已保存阅览区 ${roomId}`, roomId));
+}
+
+function startTaskEdit(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+  if (!task) return;
+  if (task.status === "running") {
+    addLog({ level: "warn", message: "任务正在执行，请等待本次执行结束后再修改" });
+    return;
+  }
+
+  const candidates = task.form.seatCandidates?.length
+    ? task.form.seatCandidates
+    : [task.form.seatNo].filter(Boolean);
+  form.taskName.value = task.name || "";
+  taskNameTouched = true;
+  form.startTime.value = task.form.startTime || "";
+  const scheduleType = task.form.schedule?.type === "weekly" ? "weekly" : "daily";
+  const scheduleRadio = form.querySelector(`input[name="scheduleType"][value="${scheduleType}"]`);
+  if (scheduleRadio) scheduleRadio.checked = true;
+  const weekdays = new Set(task.form.schedule?.weekdays || []);
+  for (const input of form.querySelectorAll('input[name="weekdays"]')) {
+    input.checked = weekdays.has(Number(input.value));
+  }
+  form.seatNo.value = candidates[0] || "";
+  form.seatNoAlt1.value = candidates[1] || "";
+  form.seatNoAlt2.value = candidates[2] || "";
+  ensureRoomOption(task.form.roomId);
+  form.roomId.value = task.form.roomId || "";
+  const modeRadio = form.querySelector(`input[name="mode"][value="${task.form.mode || "browser"}"]`);
+  if (modeRadio) modeRadio.checked = true;
+  document.querySelector("#visibleBrowser").checked = task.form.visibleBrowser !== false;
+  segmentsEl.innerHTML = "";
+  for (const segment of task.form.segments || []) {
+    addSegment({ ...segment, date: segmentDisplayDate(task, segment) });
+  }
+  if (!segmentsEl.children.length) addSegment();
+  updateScheduleControls();
+  setTaskEditorMode(task);
+  controlPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  form.taskName.focus({ preventScroll: true });
 }
 
 function markTaskNameTouched() {
@@ -267,13 +352,14 @@ function renderTasks() {
       const nextText = paused ? "已暂停" : `下次执行 ${scheduledAt}`;
       const repeatText = scheduleLabel(task.form.schedule);
       return `
-        <article class="task-card" data-id="${task.id}">
+        <article class="task-card ${editingTaskId === task.id ? "editing" : ""}" data-id="${task.id}" tabindex="0" aria-label="修改任务 ${escapeHtml(task.name || task.id)}">
           <header>
             <span>${escapeHtml(task.name || task.id)} · ${statusText(task.status)}</span>
             <span>${escapeHtml(repeatText)} ${escapeHtml(task.form.startTime || "--:--")}</span>
           </header>
           <p>${escapeHtml(nextText)}；账号 ${escapeHtml(task.form.account)}；候选座位 ${escapeHtml(seats)}；将预约 ${escapeHtml(segments)}${escapeHtml(last)}</p>
           <div class="task-actions">
+            <button class="secondary edit-task" ${running ? "disabled" : ""}>修改</button>
             <button class="secondary run-now" ${running || paused ? "disabled" : ""}>立即执行</button>
             <button class="secondary toggle-pause" ${running ? "disabled" : ""}>${paused ? "恢复执行" : "暂停执行"}</button>
             <button class="trash-task" title="删除任务" aria-label="删除任务">
@@ -305,6 +391,7 @@ async function loadTasks() {
   }
   const data = await response.json();
   tasks = data.tasks || [];
+  if (editingTaskId && !tasks.some((task) => task.id === editingTaskId)) resetTaskFormForCreate();
   renderTasks();
   renderLogs();
 }
@@ -339,7 +426,9 @@ async function createTask(event) {
     addLog({ level: "error", message: "请先登录并绑定学号" });
     return;
   }
-  const submitButton = form.querySelector(".primary");
+  const editing = Boolean(editingTaskId);
+  const taskId = editingTaskId;
+  const submitButton = taskSubmitButton;
   const segments = collectSegments();
   const seatCandidates = collectSeatCandidates();
   const schedule = collectSchedule();
@@ -352,7 +441,6 @@ async function createTask(event) {
   }
 
   const payload = {
-    password: form.password.value,
     startTime: form.startTime.value,
     scheduleType: schedule.scheduleType,
     weekdays: schedule.weekdays,
@@ -364,21 +452,27 @@ async function createTask(event) {
     segments,
   };
   const taskName = form.taskName.value.trim();
-  if (taskNameTouched && taskName) payload.name = taskName;
+  if (editing || (taskNameTouched && taskName)) payload.name = taskName;
+  if (!editing || editingPasswordTouched) payload.password = form.password.value;
 
   submitButton.disabled = true;
   try {
-    const response = await fetch("/api/tasks", {
-      method: "POST",
+    const response = await fetch(editing ? `/api/tasks/${taskId}` : "/api/tasks", {
+      method: editing ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
-      throw new Error((data.errors || [data.message || "创建失败"]).join("；"));
+      throw new Error((data.errors || [data.message || (editing ? "修改失败" : "创建失败")]).join("；"));
     }
-    resetTaskNameField();
-    addLog({ level: "success", message: `任务已创建：${data.task.name || data.task.id}` });
+    if (editing) {
+      addLog({ level: "success", message: `任务已修改：${data.task.name || data.task.id}` });
+      resetTaskFormForCreate();
+    } else {
+      resetTaskNameField();
+      addLog({ level: "success", message: `任务已创建：${data.task.name || data.task.id}` });
+    }
     await loadTasks();
   } catch (error) {
     addLog({ level: "error", message: error.message });
@@ -434,18 +528,31 @@ async function handleTaskAction(event) {
   const card = event.target.closest(".task-card");
   if (!card) return;
   const id = card.dataset.id;
-  if (event.target.classList.contains("run-now")) {
-    await requestTaskAction(`/api/tasks/${id}/run-now`, "立即执行失败");
-    await loadTasks();
+  const button = event.target.closest("button");
+  if (!button) {
+    startTaskEdit(id);
+    return;
   }
-  if (event.target.classList.contains("toggle-pause")) {
+  if (button.classList.contains("edit-task")) {
+    startTaskEdit(id);
+    return;
+  }
+  if (button.classList.contains("run-now")) {
+    if (await requestTaskAction(`/api/tasks/${id}/run-now`, "立即执行失败")) await loadTasks();
+    return;
+  }
+  if (button.classList.contains("toggle-pause")) {
     const paused = card.querySelector(".toggle-pause").textContent.includes("恢复");
-    await requestTaskAction(`/api/tasks/${id}/${paused ? "resume" : "pause"}`, paused ? "恢复失败" : "暂停失败");
-    await loadTasks();
+    if (await requestTaskAction(`/api/tasks/${id}/${paused ? "resume" : "pause"}`, paused ? "恢复失败" : "暂停失败")) {
+      await loadTasks();
+    }
+    return;
   }
-  if (event.target.closest(".trash-task")) {
-    await requestTaskAction(`/api/tasks/${id}`, "删除失败", "DELETE");
-    await loadTasks();
+  if (button.classList.contains("trash-task")) {
+    if (await requestTaskAction(`/api/tasks/${id}`, "删除失败", "DELETE")) {
+      if (editingTaskId === id) resetTaskFormForCreate();
+      await loadTasks();
+    }
   }
 }
 
@@ -454,7 +561,9 @@ async function requestTaskAction(url, fallbackMessage, method = "POST") {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) {
     addLog({ level: "error", message: data.message || fallbackMessage });
+    return false;
   }
+  return true;
 }
 
 function connectEvents() {
@@ -482,6 +591,7 @@ function connectEvents() {
     }
     if (data.type === "task-deleted") {
       tasks = tasks.filter((task) => task.id !== data.taskId);
+      if (editingTaskId === data.taskId) resetTaskFormForCreate();
       renderTasks();
       renderLogs();
     }
@@ -554,6 +664,7 @@ async function logout() {
   tasks = [];
   if (events) events.close();
   events = null;
+  resetTaskFormForCreate();
   renderAuth();
   renderTasks();
   addLog({ level: "warn", message: "已退出系统账号" });
@@ -579,7 +690,16 @@ document.querySelector("#addSegment").addEventListener("click", () => addSegment
 document.querySelector("#refreshMenu").addEventListener("click", loadSeatMenu);
 document.querySelector("#previewSeat").addEventListener("click", previewSeat);
 taskListEl.addEventListener("click", handleTaskAction);
+taskListEl.addEventListener("keydown", (event) => {
+  if (!event.target.classList.contains("task-card") || !["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  startTaskEdit(event.target.dataset.id);
+});
+cancelTaskEditButton.addEventListener("click", () => resetTaskFormForCreate());
 form.startTime.addEventListener("input", updateDefaultSegmentDates);
+form.password.addEventListener("input", () => {
+  if (editingTaskId) editingPasswordTouched = true;
+});
 form.taskName.addEventListener("beforeinput", markTaskNameTouched);
 form.taskName.addEventListener("paste", markTaskNameTouched);
 form.taskName.addEventListener("cut", markTaskNameTouched);
@@ -592,14 +712,11 @@ loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);
 logoutButton.addEventListener("click", logout);
 clearLogsButton.addEventListener("click", clearLogs);
-window.addEventListener("pageshow", resetTaskNameField);
+window.addEventListener("pageshow", () => {
+  if (!editingTaskId) resetTaskNameField();
+});
 
-const start = new Date(Date.now() + 5 * 60 * 1000);
-form.startTime.value = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
-lastDefaultSegmentDate = defaultSegmentDate();
-addSegment();
-updateScheduleControls();
-resetTaskNameField();
+resetTaskFormForCreate({ preservePassword: false });
 tickClock();
 setInterval(tickClock, 1000);
 renderAuth();
