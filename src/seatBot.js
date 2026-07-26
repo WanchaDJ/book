@@ -8,6 +8,11 @@ export const TARGET = {
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36";
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_FORM_TIMEOUT_MS = 15000;
+const LOGIN_VERIFY_TIMEOUT_MS = 12000;
+const AUTH_API_TIMEOUT_MS = 6000;
+const OFFICIAL_API_TIMEOUT_MS = 20000;
 
 function isTruthyEnv(value) {
   return /^(1|true|yes|on)$/i.test(String(value || ""));
@@ -59,27 +64,68 @@ function seatCandidates(form) {
 }
 
 async function clickFirstVisible(page, selectors, options = {}) {
-  for (const selector of selectors) {
-    const locator = page.locator(selector).first();
-    try {
-      await locator.waitFor({ state: "visible", timeout: options.timeout || 1200 });
-      await locator.click({ timeout: options.timeout || 1200 });
-      return selector;
-    } catch {}
-  }
+  const timeout = options.timeout || 3000;
+  const deadline = Date.now() + timeout;
+  do {
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first();
+      if (!(await locator.isVisible().catch(() => false))) continue;
+      try {
+        await locator.click({ timeout: Math.max(250, deadline - Date.now()), noWaitAfter: true });
+        return selector;
+      } catch {}
+    }
+    if (Date.now() < deadline) await page.waitForTimeout(150).catch(() => {});
+  } while (Date.now() < deadline);
   return null;
 }
 
-async function fillFirstVisible(page, selectors, value) {
-  for (const selector of selectors) {
-    const locator = page.locator(selector).first();
-    try {
-      await locator.waitFor({ state: "visible", timeout: 1500 });
-      await locator.fill(value);
-      return selector;
-    } catch {}
-  }
+async function fillFirstVisible(page, selectors, value, options = {}) {
+  const timeout = options.timeout || 3000;
+  const deadline = Date.now() + timeout;
+  do {
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first();
+      if (!(await locator.isVisible().catch(() => false))) continue;
+      try {
+        await locator.fill(value, { timeout: Math.max(250, deadline - Date.now()) });
+        return selector;
+      } catch {}
+    }
+    if (Date.now() < deadline) await page.waitForTimeout(150).catch(() => {});
+  } while (Date.now() < deadline);
   return null;
+}
+
+async function withTimeoutFallback(promise, timeoutMs, fallback) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isAuthUrl(value) {
+  return /authserver|authcenter|\/login(?:[/?#]|$)/i.test(String(value || ""));
+}
+
+function loginFailure(message, retryable = true) {
+  const error = new Error(message);
+  error.retryable = retryable;
+  return error;
+}
+
+function isRetryableLoginError(error) {
+  if (typeof error?.retryable === "boolean") return error.retryable;
+  return !/验证码|滑块|密码错误|账号或密码|用户名或密码|账号.{0,6}(?:锁定|冻结|停用)|绑定学号不一致|登录账号与绑定学号不一致/.test(
+    String(error?.message || ""),
+  );
 }
 
 async function hasActiveChallenge(page) {
@@ -100,14 +146,26 @@ async function hasActiveChallenge(page) {
   }).catch(() => false);
 }
 
-async function login(page, form, log) {
+async function loginOnce(page, form, log) {
   log("info", "打开图书馆预约系统登录页");
   await page.goto(TARGET.mobileReserveUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForTimeout(2500);
 
-  const current = page.url();
-  if (!/authserver|authcenter|login/.test(current)) {
-    log("success", "当前浏览器会话已登录");
+  const accountSelectors = [
+    "input#username[name='username']",
+    "input[name='username']",
+    "input[placeholder*='学号']",
+    "input[placeholder*='账号']",
+    "input[placeholder*='用户']",
+  ];
+  const loginFormVisible = await page
+    .locator(accountSelectors.join(", "))
+    .first()
+    .waitFor({ state: "visible", timeout: LOGIN_FORM_TIMEOUT_MS })
+    .then(() => true)
+    .catch(() => false);
+
+  if (!loginFormVisible && !isAuthUrl(page.url())) {
+    log("info", "预约页面未出现登录表单，正在验证官网会话");
     return;
   }
 
@@ -118,16 +176,11 @@ async function login(page, form, log) {
 
   const accountFilled = await fillFirstVisible(
     page,
-    [
-      "input#username[name='username']",
-      "input[name='username']",
-      "input[placeholder*='学号']",
-      "input[placeholder*='账号']",
-      "input[placeholder*='用户']",
-    ],
+    accountSelectors,
     form.account,
+    { timeout: 4000 },
   );
-  if (!accountFilled) throw new Error("没有找到账号输入框，登录页结构可能已变化");
+  if (!accountFilled) throw loginFailure("没有找到账号输入框，登录页可能尚未加载完成");
 
   const passwordFilled = await fillFirstVisible(
     page,
@@ -138,33 +191,74 @@ async function login(page, form, log) {
       "input[placeholder*='密码']",
     ],
     form.password,
+    { timeout: 4000 },
   );
-  if (!passwordFilled) throw new Error("没有找到密码输入框，登录页结构可能已变化");
+  if (!passwordFilled) throw loginFailure("没有找到密码输入框，登录页可能尚未加载完成");
 
   if (await hasActiveChallenge(page)) {
-    throw new Error("登录页出现验证码或滑块，需要手动完成；本工具不会自动识别验证码");
+    throw loginFailure("登录页出现验证码或滑块，需要手动完成；本工具不会自动识别验证码", false);
   }
 
   const clicked = await clickFirstVisible(page, [
     "#login_submit",
     "a.login-btn",
     "button:has-text('登录')",
+    "form button[type='submit']",
+    "input[type='submit']",
+    "[role='button']:has-text('登录')",
     "text=登录",
+  ], { timeout: 4000 });
+  if (!clicked) throw loginFailure("没有找到或无法点击登录按钮，登录页可能尚未加载完成");
+
+  await Promise.race([
+    page.waitForURL((url) => !isAuthUrl(url.toString()), { timeout: LOGIN_VERIFY_TIMEOUT_MS }).catch(() => {}),
+    page.locator("#showErrorTip, .form-error, .form-errorTip").first().waitFor({ state: "visible", timeout: LOGIN_VERIFY_TIMEOUT_MS }).catch(() => {}),
+    page.waitForTimeout(LOGIN_VERIFY_TIMEOUT_MS),
   ]);
-  if (!clicked) throw new Error("没有找到登录按钮，登录页结构可能已变化");
 
-  await page.waitForLoadState("domcontentloaded", { timeout: 60000 }).catch(() => {});
-  await page.waitForTimeout(3500);
-
-  if (/authserver|authcenter/.test(page.url())) {
+  if (isAuthUrl(page.url())) {
+    if (await hasActiveChallenge(page)) {
+      throw loginFailure("登录页出现验证码或滑块，需要手动完成；本工具不会自动识别验证码", false);
+    }
     const errorText = await page
       .locator("#showErrorTip, .form-error, .form-errorTip")
       .first()
       .innerText({ timeout: 1000 })
       .catch(() => "");
-    throw new Error(errorText ? `登录未完成：${errorText}` : "登录未完成，可能需要验证码、二次确认或账号密码错误");
+    if (errorText) {
+      const retryable = !/验证码|密码错误|账号或密码|用户名或密码|锁定|冻结|停用/.test(errorText);
+      throw loginFailure(`登录未完成：${errorText}`, retryable);
+    }
+    throw loginFailure("登录提交后仍未建立官网会话，可能是认证页面响应超时");
   }
-  log("success", "登录完成");
+  log("info", "登录页面已提交，正在验证官网会话");
+}
+
+async function login(context, page, form, log, options = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= LOGIN_MAX_ATTEMPTS; attempt += 1) {
+    if (options.clearBeforeFirst || attempt > 1) {
+      await clearOfficialSession(context, page);
+    }
+    log("info", `官网登录尝试 ${attempt}/${LOGIN_MAX_ATTEMPTS}`);
+    try {
+      await loginOnce(page, form, log);
+      const userInfo = await waitForLoggedInUserInfo(context);
+      assertLoggedInAccount(userInfo, form);
+      await cacheUserInfoOnPage(page, userInfo);
+      log("success", `官网会话验证成功（第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次尝试）`);
+      return userInfo;
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableLoginError(error);
+      log("warn", `第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次登录失败：${error.message}`);
+      if (!retryable) throw error;
+      if (attempt < LOGIN_MAX_ATTEMPTS) {
+        await page.waitForTimeout(Math.min(attempt * 1000, 3000)).catch(() => {});
+      }
+    }
+  }
+  throw new Error(`官网登录重试 ${LOGIN_MAX_ATTEMPTS} 次仍失败：${lastError?.message || "未知错误"}`);
 }
 
 function normalizeText(value) {
@@ -208,19 +302,23 @@ function pickUserInfo(value, depth = 0) {
 }
 
 async function readUserInfoFromPage(page) {
-  const values = await page
-    .evaluate(() => {
-      const collect = (store) => {
-        const rows = [];
-        for (let index = 0; index < store.length; index += 1) {
-          const key = store.key(index);
-          if (/userInfo|vuex/i.test(key)) rows.push(store.getItem(key));
-        }
-        return rows;
-      };
-      return [...collect(window.sessionStorage), ...collect(window.localStorage)];
-    })
-    .catch(() => []);
+  const values = await withTimeoutFallback(
+    page
+      .evaluate(() => {
+        const collect = (store) => {
+          const rows = [];
+          for (let index = 0; index < store.length; index += 1) {
+            const key = store.key(index);
+            if (/userInfo|vuex/i.test(key)) rows.push(store.getItem(key));
+          }
+          return rows;
+        };
+        return [...collect(window.sessionStorage), ...collect(window.localStorage)];
+      })
+      .catch(() => []),
+    3000,
+    [],
+  );
 
   for (const value of values) {
     const userInfo = pickUserInfo(value);
@@ -254,41 +352,77 @@ async function readApiResponse(response, action) {
   return data ?? { code: -1, message: text };
 }
 
-async function apiGet(context, userInfo, path, params, action) {
+async function apiGet(context, userInfo, path, params, action, options = {}) {
   const response = await context.request.get(`${TARGET.apiBase}/${path.replace(/^\/+/, "")}`, {
     params,
     headers: apiHeaders(userInfo),
+    timeout: options.timeout || OFFICIAL_API_TIMEOUT_MS,
   });
   return readApiResponse(response, action);
 }
 
-async function apiPost(context, userInfo, path, payload, action) {
+async function apiPost(context, userInfo, path, payload, action, options = {}) {
   const response = await context.request.post(`${TARGET.apiBase}/${path.replace(/^\/+/, "")}`, {
     data: payload,
     headers: {
       ...apiHeaders(userInfo),
       "content-type": "application/json;charset=UTF-8",
     },
+    timeout: options.timeout || OFFICIAL_API_TIMEOUT_MS,
   });
   return readApiResponse(response, action);
 }
 
 async function fetchLoggedInUserInfo(context) {
-  const data = await apiGet(context, {}, "auth/userInfo", {}, "读取用户信息");
+  const data = await apiGet(context, {}, "auth/userInfo", {}, "读取用户信息", { timeout: AUTH_API_TIMEOUT_MS });
   if (data?.code !== 0 || !data.data) {
     throw new Error(data?.message || "没有从登录会话中取得用户信息");
   }
   return data.data;
 }
 
+async function waitForLoggedInUserInfo(context) {
+  const deadline = Date.now() + LOGIN_VERIFY_TIMEOUT_MS;
+  let lastError = null;
+  do {
+    try {
+      return await fetchLoggedInUserInfo(context);
+    } catch (error) {
+      lastError = error;
+    }
+    if (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  } while (Date.now() < deadline);
+  throw lastError || new Error("等待官网登录状态超时");
+}
+
+async function cacheUserInfoOnPage(page, userInfo) {
+  await withTimeoutFallback(
+    page
+      .evaluate((info) => {
+        window.sessionStorage.setItem("userInfo", JSON.stringify(info));
+        window.sessionStorage.setItem("isLogin", "true");
+      }, userInfo)
+      .catch(() => {}),
+    3000,
+    null,
+  );
+}
+
 async function clearOfficialSession(context, page) {
   await context.clearCookies().catch(() => {});
-  await page
-    .evaluate(() => {
-      window.localStorage.clear();
-      window.sessionStorage.clear();
-    })
-    .catch(() => {});
+  await withTimeoutFallback(
+    page
+      .evaluate(() => {
+        window.localStorage.clear();
+        window.sessionStorage.clear();
+      })
+      .catch(() => {}),
+    3000,
+    null,
+  );
+  await page.goto("about:blank", { waitUntil: "commit", timeout: 5000 }).catch(() => {});
 }
 
 function officialAccNo(userInfo, form) {
@@ -296,35 +430,30 @@ function officialAccNo(userInfo, form) {
 }
 
 async function getLoggedInUserInfo(context, page, form, log) {
-  let userInfo = await readUserInfoFromPage(page);
-  if (userInfo) {
-    assertLoggedInAccount(userInfo, form);
-    return userInfo;
+  const cachedUserInfo = await readUserInfoFromPage(page);
+  if (cachedUserInfo) {
+    try {
+      assertLoggedInAccount(cachedUserInfo, form);
+    } catch (error) {
+      log("warn", `网页缓存中的用户信息已过期：${error.message}`);
+    }
   }
 
   log("info", "正在从登录会话读取用户信息");
+  let userInfo;
   try {
     userInfo = await fetchLoggedInUserInfo(context);
   } catch (error) {
     log("warn", `官网登录态已失效：${error.message}`);
-    log("info", "正在清理官网会话并重新登录");
-    await clearOfficialSession(context, page);
-    await login(page, form, log);
-    log("info", "重新登录后再次读取用户信息");
-    userInfo = await fetchLoggedInUserInfo(context);
+    log("info", `将重新登录，最多尝试 ${LOGIN_MAX_ATTEMPTS} 次`);
+    return login(context, page, form, log, { clearBeforeFirst: true });
   }
 
-  await page
-    .evaluate((info) => {
-      window.sessionStorage.setItem("userInfo", JSON.stringify(info));
-      window.sessionStorage.setItem("isLogin", "true");
-    }, userInfo)
-    .catch(() => {});
-
+  assertLoggedInAccount(userInfo, form);
+  await cacheUserInfoOnPage(page, userInfo);
   if (!userInfo.token) {
     log("warn", "已取得用户信息，但未发现 token；将依赖当前网页登录 Cookie 提交");
   }
-  assertLoggedInAccount(userInfo, form);
   return userInfo;
 }
 
@@ -569,7 +698,7 @@ export async function runSeatTask(form, log) {
   const page = await context.newPage();
 
   try {
-    await login(page, form, log);
+    await login(context, page, form, log);
 
     const results = [];
     log("info", `候选座位顺序：${seatCandidates(form).join(" → ")}`);
@@ -608,7 +737,7 @@ export async function previewSeatMatch(form, log) {
   const page = await context.newPage();
 
   try {
-    await login(page, form, log);
+    await login(context, page, form, log);
     const userInfo = await getLoggedInUserInfo(context, page, form, log);
     const segment = { date: form.date, begin: "08:00", end: "09:00" };
     const candidates = seatCandidates(form);
