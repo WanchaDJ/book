@@ -407,6 +407,25 @@ h2 {
   flex-wrap: wrap;
 }
 
+.admin-task-row > header > .admin-task-head-actions {
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-task-toggle {
+  min-height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.admin-task-toggle.resume {
+  color: #fff;
+  background: var(--accent);
+}
+
 .admin-task-id {
   color: var(--muted);
   font-family: "Consolas", monospace;
@@ -898,6 +917,15 @@ button:disabled {
   .admin-login-panel,
   .admin-workspace {
     padding: 18px;
+  }
+
+  .admin-task-row > header {
+    align-items: flex-start;
+  }
+
+  .admin-task-row > header > .admin-task-head-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .form-grid,

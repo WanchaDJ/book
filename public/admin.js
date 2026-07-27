@@ -150,15 +150,29 @@ function renderTask(task) {
   const statusClass = ["scheduled", "running", "done", "failed", "cancelled", "paused"].includes(task.status)
     ? task.status
     : "unknown";
+  const paused = task.status === "paused";
+  const running = task.status === "running";
+  const action = paused ? "resume" : "pause";
+  const actionText = paused ? "恢复任务" : "暂停任务";
+  const actionTitle = running ? "任务正在执行，当前流程结束后才能暂停" : actionText;
 
   return `
-    <article class="admin-task-row">
+    <article class="admin-task-row" data-task-id="${escapeHtml(task.id)}">
       <header>
         <div>
           <strong>${escapeHtml(task.name || task.id)}</strong>
           <span class="admin-task-id">${escapeHtml(task.id)}</span>
         </div>
-        <span class="task-status ${statusClass}">${escapeHtml(statusText(task.status))}</span>
+        <div class="admin-task-head-actions">
+          <span class="task-status ${statusClass}">${escapeHtml(statusText(task.status))}</span>
+          <button
+            type="button"
+            class="secondary admin-task-toggle ${paused ? "resume" : ""}"
+            data-task-action="${action}"
+            ${running ? "disabled" : ""}
+            title="${escapeHtml(actionTitle)}"
+          >${escapeHtml(actionText)}</button>
+        </div>
       </header>
       <div class="seat-chain" aria-label="候选座位">${renderSeatCandidates(task)}</div>
       <dl class="admin-task-details">
@@ -326,10 +340,32 @@ async function handleUserAction(event) {
   }
 }
 
+async function handleTaskAction(event) {
+  const button = event.target.closest(".admin-task-toggle");
+  if (!button || button.disabled) return;
+  const row = button.closest(".admin-task-row");
+  const taskId = row?.dataset.taskId;
+  const action = button.dataset.taskAction;
+  if (!taskId || !["pause", "resume"].includes(action)) return;
+
+  const actionText = action === "pause" ? "暂停" : "恢复";
+  button.disabled = true;
+  setMessage(adminTasksMessage);
+  try {
+    await requestJson(`/api/admin/tasks/${encodeURIComponent(taskId)}/${action}`, { method: "POST" });
+    await loadTasks();
+    setMessage(adminTasksMessage, `任务已${actionText}`, "success");
+  } catch (error) {
+    button.disabled = false;
+    setMessage(adminTasksMessage, error.message, "error");
+  }
+}
+
 loginForm.addEventListener("submit", login);
 createUserForm.addEventListener("submit", createUser);
 logoutButton.addEventListener("click", logout);
 managedUsersEl.addEventListener("click", handleUserAction);
+managedTasksEl.addEventListener("click", handleTaskAction);
 featureBar.addEventListener("click", (event) => {
   const button = event.target.closest("[data-admin-view]");
   if (!button) return;

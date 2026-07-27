@@ -609,6 +609,50 @@ app.get("/api/admin/tasks", requireAdmin, (_req, res) => {
   res.json({ ok: true, updatedAt: new Date().toISOString(), users });
 });
 
+app.post("/api/admin/tasks/:id/pause", requireAdmin, (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task || task.cancelled) {
+    res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.status === "running") {
+    res.status(409).json({ ok: false, message: "任务正在执行，不能暂停当前执行流程" });
+    return;
+  }
+  if (task.status === "paused") {
+    res.json({ ok: true, task: adminTaskSummary(task) });
+    return;
+  }
+  if (task.timer) clearTimeout(task.timer);
+  task.timer = null;
+  task.status = "paused";
+  addLog(task, "warn", `管理员已暂停任务「${task.name}」，定时不会执行`);
+  bus.emit("task", publicTask(task));
+  res.json({ ok: true, task: adminTaskSummary(task) });
+});
+
+app.post("/api/admin/tasks/:id/resume", requireAdmin, (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task || task.cancelled) {
+    res.status(404).json({ ok: false, message: "任务不存在" });
+    return;
+  }
+  if (task.status === "running") {
+    res.status(409).json({ ok: false, message: "任务正在执行，不能重复恢复" });
+    return;
+  }
+  if (task.status !== "paused") {
+    res.json({ ok: true, task: adminTaskSummary(task) });
+    return;
+  }
+  const nextAt = nextRunAt(task.form.startTime, task.form.schedule);
+  task.status = "scheduled";
+  scheduleTask(task, nextAt);
+  addLog(task, "info", `管理员已恢复任务「${task.name}」，下一次将在 ${nextAt.toLocaleString("zh-CN", { hour12: false })} 执行`);
+  bus.emit("task", publicTask(task));
+  res.json({ ok: true, task: adminTaskSummary(task) });
+});
+
 app.post("/api/admin/users", requireAdmin, (req, res) => {
   try {
     const username = req.body?.username;
