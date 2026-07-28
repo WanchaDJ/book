@@ -7,6 +7,7 @@ import { dirname, resolve } from "node:path";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
 import { authenticateUser, bindStudentId, createUser, deleteUser, getUser, listUsers } from "./src/authStore.js";
 import { expandSeatRange } from "./src/seatRange.js";
+import { upsertLogEntry } from "./src/taskLogs.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -231,13 +232,13 @@ function restorePersistentTasks() {
 
       tasks.set(task.id, task);
       if (task.status === "paused") {
-        addLog(task, "info", "服务重启后已恢复任务，当前保持暂停状态");
+        addLog(task, "info", "当前状态：任务已暂停，定时不会执行", { logKey: "schedule" });
         continue;
       }
 
       const nextAt = nextRunAt(task.form.startTime, task.form.schedule);
       scheduleTask(task, nextAt);
-      addLog(task, "info", `服务重启后已恢复任务，下一次将在 ${nextAt.toLocaleString("zh-CN", { hour12: false })} 执行`);
+      addLog(task, "info", `下次执行：${nextAt.toLocaleString("zh-CN", { hour12: false })}`, { logKey: "schedule" });
     } catch (error) {
       failedCount += 1;
       console.error(`恢复任务失败：${error.message}`);
@@ -262,10 +263,15 @@ function readPersistentTasks() {
   }
 }
 
-function addLog(task, level, message) {
-  const entry = { at: nowText(), ts: Date.now(), level, message };
-  task.logs.push(entry);
-  if (task.logs.length > 300) task.logs.shift();
+function addLog(task, level, message, options = {}) {
+  const entry = {
+    at: nowText(),
+    ts: Date.now(),
+    level,
+    message,
+    ...(options.logKey ? { logKey: String(options.logKey) } : {}),
+  };
+  upsertLogEntry(task.logs, entry);
   bus.emit("log", { taskId: task.id, entry });
   savePersistentTasks();
 }
@@ -528,25 +534,52 @@ async function executeTask(task, runAt = new Date()) {
   task.status = "running";
   task.timer = null;
   task.startedAt = new Date().toISOString();
-  addLog(task, "info", "到达设定时间，开始执行预约任务");
+  const runNumber = task.runCount + 1;
+  const runKey = `run-${runNumber}`;
   try {
     const runForm = materializeRunForm(task, runAt);
-    addLog(task, "info", `本次预约日期：${runForm.segments.map((segment) => segment.date).join("、")}`);
-    task.result = await runSeatTask(runForm, (level, message) => addLog(task, level, message));
+    const runSeatCandidates = Array.isArray(runForm.seatCandidates) && runForm.seatCandidates.length
+      ? runForm.seatCandidates
+      : [runForm.seatNo].filter(Boolean);
+    const fallbackText = runForm.fallbackEnabled
+      ? `；兜底 ${runForm.fallbackSeatStart} 至 ${runForm.fallbackSeatEnd}`
+      : "";
+    addLog(
+      task,
+      "info",
+      `第 ${runNumber} 次执行开始：${runForm.segments.length} 个时段，指定座位 ${runSeatCandidates.join("、")}${fallbackText}`,
+      { logKey: `${runKey}:result` },
+    );
+    task.result = await runSeatTask(runForm, (level, message, options = {}) => addLog(
+      task,
+      level,
+      message,
+      options.logKey ? { ...options, logKey: `${runKey}:${options.logKey}` } : options,
+    ));
     task.lastRunOk = Boolean(task.result.ok);
     task.runCount += 1;
-    addLog(task, task.result.ok ? "success" : "error", task.result.message);
+    addLog(
+      task,
+      task.result.ok ? "success" : "error",
+      task.result.ok ? `第 ${runNumber} 次执行完成：${task.result.message}` : `第 ${runNumber} 次执行失败：${task.result.message}`,
+      { logKey: `${runKey}:result` },
+    );
   } catch (error) {
     task.result = { ok: false, message: error.message };
     task.lastRunOk = false;
     task.runCount += 1;
-    addLog(task, "error", error.message);
+    addLog(task, "error", `第 ${runNumber} 次执行失败：${error.message}`, { logKey: `${runKey}:result` });
   } finally {
     task.finishedAt = new Date().toISOString();
     if (!task.cancelled && task.status !== "paused" && task.recurring) {
       const nextAt = nextRunAt(task.form.startTime, task.form.schedule);
       scheduleTask(task, nextAt);
-      addLog(task, "info", `已安排下一次${scheduleText(task.form.schedule)}：${nextAt.toLocaleString("zh-CN", { hour12: false })}`);
+      addLog(
+        task,
+        "info",
+        `下次执行：${scheduleText(task.form.schedule)}，${nextAt.toLocaleString("zh-CN", { hour12: false })}`,
+        { logKey: "schedule" },
+      );
     } else if (!task.cancelled) {
       task.status = task.result?.ok ? "done" : "failed";
     }
@@ -789,14 +822,15 @@ app.post("/api/tasks", requireAuth, (req, res) => {
 
   tasks.set(task.id, task);
   scheduleTask(task, startAt);
-  addLog(task, "info", `任务「${task.name}」已创建，下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 开始`);
-  addLog(task, "info", `开始抢座时间：${form.startTime}`);
-  addLog(task, "info", `执行规则：${scheduleText(form.schedule)}`);
-  addLog(task, "info", "预约日期规则：按页面选择的日期提交，循环任务按该日期与开始抢座日期的相对天数滚动");
-  addLog(task, "info", `候选座位 ${form.seatCandidates.join("、")}，共 ${form.segments.length} 个时间段`);
-  if (form.fallbackEnabled) {
-    addLog(task, "info", `区间兜底已开启：${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`);
-  }
+  const fallbackText = form.fallbackEnabled
+    ? `；兜底 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`
+    : "";
+  addLog(
+    task,
+    "info",
+    `任务已创建：${scheduleText(form.schedule)} ${form.startTime}，指定座位 ${form.seatCandidates.join("、")}${fallbackText}，${form.segments.length} 个时段；下次执行 ${startAt.toLocaleString("zh-CN", { hour12: false })}`,
+    { logKey: "configuration" },
+  );
   res.json({ ok: true, task: publicTask(task) });
 });
 
@@ -872,6 +906,7 @@ app.put("/api/tasks/:id", requireAuth, (req, res) => {
     task,
     "info",
     `任务配置已修改；候选座位 ${seatCandidates.join("、")}；${fallback.fallbackEnabled ? `区间兜底 ${fallback.fallbackSeatStart} 至 ${fallback.fallbackSeatEnd}；` : "未开启区间兜底；"}${wasPaused ? "当前保持暂停" : `下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 执行`}`,
+    { logKey: "configuration" },
   );
   bus.emit("task", publicTask(task));
   res.json({ ok: true, task: publicTask(task) });
@@ -903,7 +938,13 @@ app.post("/api/seat-preview", requireAuth, async (req, res) => {
         date: dateInputValue(previewDate),
         visibleBrowser: req.body.visibleBrowser !== false,
       },
-      (level, message) => logs.push({ at: nowText(), level, message }),
+      (level, message, options = {}) => upsertLogEntry(logs, {
+        at: nowText(),
+        ts: Date.now(),
+        level,
+        message,
+        ...(options.logKey ? { logKey: options.logKey } : {}),
+      }),
     );
     res.json({ ok: true, result, logs });
   } catch (error) {

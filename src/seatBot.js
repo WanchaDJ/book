@@ -135,6 +135,14 @@ function isRetryableLoginError(error) {
   );
 }
 
+function conciseErrorMessage(error, maxLength = 160) {
+  const message = String(error?.message || error || "未知错误")
+    .replace(/；提交摘要[\s\S]*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return message.length > maxLength ? `${message.slice(0, maxLength)}...` : message;
+}
+
 async function hasActiveChallenge(page) {
   return page.evaluate(() => {
     const visible = (element) => {
@@ -154,7 +162,7 @@ async function hasActiveChallenge(page) {
 }
 
 async function loginOnce(page, form, log) {
-  log("info", "打开图书馆预约系统登录页");
+  log("info", "官网登录：正在打开认证页面", { logKey: "login" });
   await page.goto(TARGET.mobileReserveUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   const accountSelectors = [
@@ -172,11 +180,11 @@ async function loginOnce(page, form, log) {
     .catch(() => false);
 
   if (!loginFormVisible && !isAuthUrl(page.url())) {
-    log("info", "预约页面未出现登录表单，正在验证官网会话");
+    log("info", "官网登录：正在验证已有登录状态", { logKey: "login" });
     return;
   }
 
-  log("info", "检测到统一身份认证页面，填写账号密码");
+  log("info", "官网登录：正在提交账号密码", { logKey: "login" });
   await page.evaluate(() => {
     document.querySelectorAll("input[readonly]").forEach((input) => input.removeAttribute("readonly"));
   });
@@ -238,7 +246,7 @@ async function loginOnce(page, form, log) {
     }
     throw loginFailure("登录提交后仍未建立官网会话，可能是认证页面响应超时");
   }
-  log("info", "登录页面已提交，正在验证官网会话");
+  log("info", "官网登录：已提交，正在确认登录结果", { logKey: "login" });
 }
 
 async function login(context, page, form, log, options = {}) {
@@ -247,25 +255,25 @@ async function login(context, page, form, log, options = {}) {
     if (options.clearBeforeFirst || attempt > 1) {
       await clearOfficialSession(context, page);
     }
-    log("info", `官网登录尝试 ${attempt}/${LOGIN_MAX_ATTEMPTS}`);
+    log("info", `官网登录：第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次尝试`, { logKey: "login" });
     try {
       await loginOnce(page, form, log);
       const userInfo = await waitForLoggedInUserInfo(context);
       assertLoggedInAccount(userInfo, form);
       await cacheUserInfoOnPage(page, userInfo);
-      log("success", `官网会话验证成功（第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次尝试）`);
+      log("success", `官网登录：成功（第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次尝试）`, { logKey: "login" });
       return userInfo;
     } catch (error) {
       lastError = error;
       const retryable = isRetryableLoginError(error);
-      log("warn", `第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次登录失败：${error.message}`);
+      log("warn", `官网登录：第 ${attempt}/${LOGIN_MAX_ATTEMPTS} 次失败，${conciseErrorMessage(error)}`, { logKey: "login" });
       if (!retryable) throw error;
       if (attempt < LOGIN_MAX_ATTEMPTS) {
         await page.waitForTimeout(Math.min(attempt * 1000, 3000)).catch(() => {});
       }
     }
   }
-  throw new Error(`官网登录重试 ${LOGIN_MAX_ATTEMPTS} 次仍失败：${lastError?.message || "未知错误"}`);
+  throw new Error(`官网登录重试 ${LOGIN_MAX_ATTEMPTS} 次仍失败：${conciseErrorMessage(lastError)}`);
 }
 
 function normalizeText(value) {
@@ -442,25 +450,20 @@ async function getLoggedInUserInfo(context, page, form, log) {
     try {
       assertLoggedInAccount(cachedUserInfo, form);
     } catch (error) {
-      log("warn", `网页缓存中的用户信息已过期：${error.message}`);
+      log("warn", "官网登录：缓存状态已过期，正在重新确认", { logKey: "login" });
     }
   }
 
-  log("info", "正在从登录会话读取用户信息");
   let userInfo;
   try {
     userInfo = await fetchLoggedInUserInfo(context);
   } catch (error) {
-    log("warn", `官网登录态已失效：${error.message}`);
-    log("info", `将重新登录，最多尝试 ${LOGIN_MAX_ATTEMPTS} 次`);
+    log("warn", `官网登录：状态已失效，准备重新登录（最多 ${LOGIN_MAX_ATTEMPTS} 次）`, { logKey: "login" });
     return login(context, page, form, log, { clearBeforeFirst: true });
   }
 
   assertLoggedInAccount(userInfo, form);
   await cacheUserInfoOnPage(page, userInfo);
-  if (!userInfo.token) {
-    log("warn", "已取得用户信息，但未发现 token；将依赖当前网页登录 Cookie 提交");
-  }
   return userInfo;
 }
 
@@ -483,7 +486,6 @@ async function getRoomCandidates(form, log) {
 
   const rooms = flattenRooms(await fetchSeatMenu());
   if (!rooms.length) throw new Error("没有读取到可用阅览区，无法自动识别座位所在区域");
-  log("info", `未选择阅览区，将在 ${rooms.length} 个阅览区中查找候选座位 ${seatCandidates(form).join("、")}`);
   return rooms;
 }
 
@@ -576,7 +578,6 @@ async function findSeatDevice(context, userInfo, form, segment, log, seatNo = fo
     );
     if (data?.code !== 0) {
       if (form.roomId) throw new Error(data?.message || `读取 ${room.label} 座位图失败`);
-      log("warn", `${room.label} 座位图读取失败：${data?.message || "接口返回异常"}`);
       continue;
     }
 
@@ -587,10 +588,6 @@ async function findSeatDevice(context, userInfo, form, segment, log, seatNo = fo
     const match = devices.find((device) => seatMatchInfo(device, seatNo));
     if (match) {
       const matchInfo = seatMatchInfo(match, seatNo);
-      log(
-        "success",
-        `在 ${room.label} 找到座位 ${seatLabel(match)}，devId=${match.devId ?? match.deviceId}，匹配字段 ${matchInfo.field}=${matchInfo.value}`,
-      );
       return { room, device: match, matchInfo };
     }
   }
@@ -632,7 +629,6 @@ async function findFallbackSeatDevices(context, userInfo, form, segment, log, re
       matches.push({ room, device, seatNo });
     }
     if (matches.length) {
-      log("info", `在 ${room.label} 匹配到 ${matches.length}/${requestedSeats.length} 个兜底座位`);
       return matches;
     }
   }
@@ -661,7 +657,7 @@ async function checkDeviceTips(context, userInfo, device, segment) {
   if (data?.code !== 0) throw new Error(data?.message || "座位当前不可预约");
 }
 
-async function reserveMatchedSeat(context, userInfo, form, segment, index, log, match, label) {
+async function reserveMatchedSeat(context, userInfo, form, segment, index, log, match, label, progressKey) {
   const { room, device, seatNo } = match;
   await checkDeviceTips(context, userInfo, device, segment);
 
@@ -669,9 +665,6 @@ async function reserveMatchedSeat(context, userInfo, form, segment, index, log, 
   const devId = device.devId ?? device.deviceId;
   if (!accNo) throw new Error("没有从登录会话中取得官网账号字段 accNo，无法提交预约");
   if (!devId) throw new Error(`座位 ${seatLabel(device)} 缺少 devId，无法提交预约`);
-  if (accNo !== form.account) {
-    log("info", `使用官网账号字段 appAccNo=${accNo} 提交，绑定学号 ${form.account} 已校验通过`);
-  }
 
   const payload = {
     testName: form.testName || "",
@@ -698,7 +691,11 @@ async function reserveMatchedSeat(context, userInfo, form, segment, index, log, 
     throw new Error(`${data?.message || `第 ${index + 1} 段预约失败`}；提交摘要 ${JSON.stringify(payloadSummary)}`);
   }
 
-  log("success", `第 ${index + 1} 段预约提交成功：${room.label} / ${seatLabel(device)}（${label} ${seatNo}）`);
+  log(
+    "success",
+    `第 ${index + 1} 段预约成功：${label} ${seatNo}（${room.label} / ${seatLabel(device)}）`,
+    { logKey: progressKey },
+  );
   return {
     ok: true,
     roomId: room.id,
@@ -711,8 +708,12 @@ async function reserveMatchedSeat(context, userInfo, form, segment, index, log, 
 }
 
 async function submitOfficialReserve(context, page, form, segment, index, log) {
-  log("info", `开始第 ${index + 1} 段：${formatDateTime(segment, "begin")} 至 ${formatDateTime(segment, "end")}`);
-  log("info", "使用官网可视化座位图接口读取 devId，并通过官网预约接口提交");
+  const progressKey = `segment-${index + 1}`;
+  log(
+    "info",
+    `第 ${index + 1} 段：准备预约 ${formatDateTime(segment, "begin")} 至 ${formatDateTime(segment, "end")}`,
+    { logKey: progressKey },
+  );
 
   const userInfo = await getLoggedInUserInfo(context, page, form, log);
   const candidates = seatCandidates(form);
@@ -722,19 +723,34 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
   for (let seatIndex = 0; seatIndex < candidates.length; seatIndex += 1) {
     const seatNo = candidates[seatIndex];
     const label = seatIndex === 0 ? "主座位" : `备选座位 ${seatIndex}`;
-    log("info", `第 ${index + 1} 段尝试${label}：${seatNo}`);
+    log(
+      "info",
+      `第 ${index + 1} 段：指定座位 ${seatIndex + 1}/${candidates.length}，正在尝试 ${label} ${seatNo}`,
+      { logKey: progressKey },
+    );
 
     try {
       const { room, device } = await findSeatDevice(context, userInfo, form, segment, log, seatNo);
-      return await reserveMatchedSeat(context, userInfo, form, segment, index, log, { room, device, seatNo }, label);
+      return await reserveMatchedSeat(
+        context,
+        userInfo,
+        form,
+        segment,
+        index,
+        log,
+        { room, device, seatNo },
+        label,
+        progressKey,
+      );
     } catch (error) {
-      failures.push(`${seatNo}：${error.message}`);
-      log("warn", `第 ${index + 1} 段${label} ${seatNo} 失败：${error.message}`);
+      failures.push(`${seatNo}：${conciseErrorMessage(error)}`);
     }
   }
 
   if (form.fallbackEnabled !== true) {
-    throw new Error(`第 ${index + 1} 段所有候选座位均预约失败：${failures.join("；")}`);
+    throw new Error(
+      `第 ${index + 1} 段指定座位全部失败：已尝试 ${failures.length}/${candidates.length}，最后结果：${failures.at(-1) || "官网未返回具体原因"}`,
+    );
   }
 
   const explicitKeys = new Set(candidates.map(normalizeText));
@@ -742,12 +758,20 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
   if (!rangeSeats.length) {
     throw new Error(`第 ${index + 1} 段指定座位均失败，兜底区间没有额外可尝试座位`);
   }
-  log("warn", `第 ${index + 1} 段指定座位均未成功，开始遍历兜底区间 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`);
+  log(
+    "warn",
+    `第 ${index + 1} 段：指定座位均失败，正在读取兜底区间 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`,
+    { logKey: progressKey },
+  );
 
   const matches = await findFallbackSeatDevices(context, userInfo, form, segment, log, rangeSeats);
   const availableMatches = matches.filter((match) => !hasSeatReservationConflict(match.device, segment));
   const occupiedCount = matches.length - availableMatches.length;
-  log("info", `兜底座位图检查完成：匹配 ${matches.length} 个，目标时段明显占用 ${occupiedCount} 个，准备尝试 ${availableMatches.length} 个`);
+  log(
+    "info",
+    `第 ${index + 1} 段：兜底匹配 ${matches.length} 个座位，排除占用 ${occupiedCount} 个，准备尝试 ${availableMatches.length} 个`,
+    { logKey: progressKey },
+  );
   if (!availableMatches.length) {
     throw new Error(`第 ${index + 1} 段兜底区间内没有目标时段可尝试的空闲座位`);
   }
@@ -755,18 +779,30 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
   const fallbackFailures = [];
   for (let fallbackIndex = 0; fallbackIndex < availableMatches.length; fallbackIndex += 1) {
     const match = availableMatches[fallbackIndex];
-    if (fallbackIndex === 0 || fallbackIndex % 10 === 0) {
-      log("info", `兜底预约进度 ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`);
-    }
+    log(
+      "info",
+      `第 ${index + 1} 段：兜底目前尝试到 ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`,
+      { logKey: progressKey },
+    );
     try {
-      return await reserveMatchedSeat(context, userInfo, form, segment, index, log, match, "区间兜底");
+      return await reserveMatchedSeat(
+        context,
+        userInfo,
+        form,
+        segment,
+        index,
+        log,
+        match,
+        "区间兜底",
+        progressKey,
+      );
     } catch (error) {
-      fallbackFailures.push(`${match.seatNo}：${error.message}`);
+      fallbackFailures.push(`${match.seatNo}：${conciseErrorMessage(error)}`);
     }
   }
 
-  const lastFailures = fallbackFailures.slice(-5).join("；");
-  throw new Error(`第 ${index + 1} 段兜底区间 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd} 的 ${availableMatches.length} 个可尝试座位均预约失败${lastFailures ? `；最后错误：${lastFailures}` : ""}`);
+  const lastFailure = fallbackFailures.at(-1) || "官网未返回具体原因";
+  throw new Error(`第 ${index + 1} 段兜底失败：已尝试 ${availableMatches.length}/${availableMatches.length}，最后结果：${lastFailure}`);
 }
 
 export async function runSeatTask(form, log) {
@@ -787,10 +823,6 @@ export async function runSeatTask(form, log) {
     await login(context, page, form, log);
 
     const results = [];
-    log("info", `候选座位顺序：${seatCandidates(form).join(" → ")}`);
-    if (form.fallbackEnabled === true) {
-      log("info", `区间兜底：${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}（指定座位全部失败后执行）`);
-    }
     for (let index = 0; index < form.segments.length; index += 1) {
       const segment = form.segments[index];
       results.push(await submitOfficialReserve(context, page, form, segment, index, log));
@@ -803,10 +835,7 @@ export async function runSeatTask(form, log) {
       results,
     };
   } finally {
-    if (!headless) {
-      log("info", "浏览器保持打开 20 秒，方便查看结果");
-      await page.waitForTimeout(20000).catch(() => {});
-    }
+    if (!headless) await page.waitForTimeout(20000).catch(() => {});
     await browser.close().catch(() => {});
   }
 }
@@ -838,7 +867,6 @@ export async function previewSeatMatch(form, log) {
         matches.push({ seatNo, room, device, matchInfo });
       } catch (error) {
         failures.push(`${seatNo}：${error.message}`);
-        log("warn", `候选座位 ${seatNo} 匹配失败：${error.message}`);
       }
     }
     if (!matches.length) throw new Error(`所有候选座位均未匹配：${failures.join("；")}`);
@@ -858,10 +886,7 @@ export async function previewSeatMatch(form, log) {
       message: `匹配到 ${matches.length} 个候选座位；优先使用 ${seatNo}：${room.label} / ${seatLabel(device)}，devId=${device.devId ?? device.deviceId}，字段 ${matchInfo.field}=${matchInfo.value}`,
     };
   } finally {
-    if (!headless) {
-      log("info", "匹配检查完成，浏览器保持打开 8 秒");
-      await page.waitForTimeout(8000).catch(() => {});
-    }
+    if (!headless) await page.waitForTimeout(8000).catch(() => {});
     await browser.close().catch(() => {});
   }
 }

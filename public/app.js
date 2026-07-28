@@ -302,6 +302,13 @@ function addLog(entry) {
   logBox.scrollTop = logBox.scrollHeight;
 }
 
+function upsertTaskLog(task, entry) {
+  if (!Array.isArray(task.logs)) task.logs = [];
+  const index = entry.logKey ? task.logs.findIndex((item) => item.logKey === entry.logKey) : -1;
+  if (index >= 0) task.logs[index] = entry;
+  else task.logs.push(entry);
+}
+
 function renderLogs() {
   const entries = tasks
     .flatMap((task) => (task.logs || []).map((entry) => ({ ...entry, taskName: task.name || task.id })))
@@ -635,7 +642,12 @@ function connectEvents() {
     const data = JSON.parse(event.data);
     if (data.type === "log") {
       const task = tasks.find((item) => item.id === data.taskId);
-      addLog({ ...data.entry, message: `【${task?.name || data.taskId}】${data.entry.message}` });
+      if (task) {
+        upsertTaskLog(task, data.entry);
+        renderLogs();
+      } else {
+        addLog({ ...data.entry, message: `【${data.taskId}】${data.entry.message}` });
+      }
     }
     if (data.type === "task") {
       const index = tasks.findIndex((task) => task.id === data.task.id);
