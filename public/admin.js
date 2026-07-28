@@ -129,14 +129,17 @@ function renderSeatCandidates(task) {
   const candidates = task.form.seatCandidates?.length
     ? task.form.seatCandidates
     : [task.form.seatNo].filter(Boolean);
-  if (!candidates.length) return `<span class="muted-value">未填写座位</span>`;
-  return candidates
+  const candidateTags = candidates
     .map(
       (seat, index) => `<span class="seat-tag ${index === 0 ? "primary-seat" : ""}">
         ${index === 0 ? "主座位" : `备选 ${index}`} <strong>${escapeHtml(seat)}</strong>
       </span>`,
     )
     .join("");
+  const fallbackTag = task.form.fallbackEnabled
+    ? `<span class="seat-tag fallback-seat">兜底 <strong>${escapeHtml(task.form.fallbackSeatStart || "-")} 至 ${escapeHtml(task.form.fallbackSeatEnd || "-")}</strong></span>`
+    : "";
+  return candidateTags || fallbackTag ? `${candidateTags}${fallbackTag}` : `<span class="muted-value">未填写座位</span>`;
 }
 
 function renderTask(task) {

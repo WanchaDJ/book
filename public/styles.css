@@ -499,6 +499,16 @@ h2 {
   color: #fff;
 }
 
+.seat-tag.fallback-seat {
+  border-color: #d5a534;
+  color: #75520a;
+  background: #fff7dc;
+}
+
+.seat-tag.fallback-seat strong {
+  color: #5f4207;
+}
+
 .muted-value {
   color: var(--muted);
   font-size: 13px;
@@ -648,6 +658,29 @@ select:focus {
 .checkline input {
   width: 18px;
   min-height: 18px;
+}
+
+.fallback-panel {
+  padding: 14px;
+  border-left: 4px solid var(--accent-3);
+  background: #f3f6f1;
+}
+
+.fallback-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.fallback-range-separator {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .segments {
@@ -931,6 +964,14 @@ button:disabled {
   .form-grid,
   .segment-row {
     grid-template-columns: 1fr;
+  }
+
+  .fallback-range {
+    grid-template-columns: 1fr;
+  }
+
+  .fallback-range-separator {
+    min-height: 0;
   }
 
   .weekday-picker {

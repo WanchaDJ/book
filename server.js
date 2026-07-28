@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
 import { authenticateUser, bindStudentId, createUser, deleteUser, getUser, listUsers } from "./src/authStore.js";
+import { expandSeatRange } from "./src/seatRange.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -338,6 +339,15 @@ function normalizeSeatCandidates(body) {
     .slice(0, 3);
 }
 
+function normalizeFallbackConfig(body) {
+  const enabled = body?.fallbackEnabled === true;
+  return {
+    fallbackEnabled: enabled,
+    fallbackSeatStart: enabled ? String(body?.fallbackSeatStart ?? "").trim() : "",
+    fallbackSeatEnd: enabled ? String(body?.fallbackSeatEnd ?? "").trim() : "",
+  };
+}
+
 function normalizeWeekdays(value) {
   if (!Array.isArray(value)) return [];
   const days = value
@@ -403,6 +413,7 @@ function materializeRunForm(task, runAt = new Date()) {
 function validatePayload(body) {
   const errors = [];
   const seatCandidates = normalizeSeatCandidates(body);
+  const fallback = normalizeFallbackConfig(body);
   const schedule = normalizeSchedule(body);
   if (!body || typeof body !== "object") errors.push("请求内容无效");
   if (!body.password?.trim()) errors.push("请输入统一认证密码");
@@ -410,6 +421,17 @@ function validatePayload(body) {
   if (body.startTime && !isClockTime(body.startTime)) errors.push("开始抢座时间无效，请使用 HH:mm");
   if (schedule.type === "weekly" && schedule.weekdays.length === 0) errors.push("请选择至少一个每周执行日期");
   if (!seatCandidates.length) errors.push("请输入座位号");
+  if (fallback.fallbackEnabled) {
+    if (!fallback.fallbackSeatStart || !fallback.fallbackSeatEnd) {
+      errors.push("启用区间兜底后，请填写开始座位和结束座位");
+    } else {
+      try {
+        expandSeatRange(fallback.fallbackSeatStart, fallback.fallbackSeatEnd);
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
+  }
   if (!Array.isArray(body.segments) || body.segments.length === 0) errors.push("至少添加一个预约时间段");
   if (Array.isArray(body.segments)) {
     body.segments.forEach((segment, index) => {
@@ -456,6 +478,9 @@ function publicTask(task) {
       account: task.form.account,
       seatNo: task.form.seatNo,
       seatCandidates: task.form.seatCandidates,
+      fallbackEnabled: task.form.fallbackEnabled === true,
+      fallbackSeatStart: task.form.fallbackSeatStart || "",
+      fallbackSeatEnd: task.form.fallbackSeatEnd || "",
       roomId: task.form.roomId,
       mode: task.form.mode,
       visibleBrowser: task.form.visibleBrowser,
@@ -487,6 +512,9 @@ function adminTaskSummary(task) {
       account: task.form?.account || "",
       seatNo: task.form?.seatNo || seatCandidates[0] || "",
       seatCandidates,
+      fallbackEnabled: task.form?.fallbackEnabled === true,
+      fallbackSeatStart: task.form?.fallbackSeatStart || "",
+      fallbackSeatEnd: task.form?.fallbackSeatEnd || "",
       roomId: task.form?.roomId || "",
       startTime: task.form?.startTime || "",
       schedule: task.form?.schedule || { type: "daily", weekdays: [] },
@@ -716,12 +744,14 @@ app.post("/api/tasks", requireAuth, (req, res) => {
 
   const runDate = new Date(startAt.getFullYear(), startAt.getMonth(), startAt.getDate());
   const seatCandidates = normalizeSeatCandidates(req.body);
+  const fallback = normalizeFallbackConfig(req.body);
   const form = {
     account: user.boundStudentId,
     password: req.body.password,
     startTime: req.body.startTime,
     seatNo: seatCandidates[0],
     seatCandidates,
+    ...fallback,
     roomId: req.body.roomId ? String(req.body.roomId) : "",
     mode: req.body.mode === "api" ? "api" : "browser",
     visibleBrowser: req.body.visibleBrowser !== false,
@@ -764,6 +794,9 @@ app.post("/api/tasks", requireAuth, (req, res) => {
   addLog(task, "info", `执行规则：${scheduleText(form.schedule)}`);
   addLog(task, "info", "预约日期规则：按页面选择的日期提交，循环任务按该日期与开始抢座日期的相对天数滚动");
   addLog(task, "info", `候选座位 ${form.seatCandidates.join("、")}，共 ${form.segments.length} 个时间段`);
+  if (form.fallbackEnabled) {
+    addLog(task, "info", `区间兜底已开启：${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`);
+  }
   res.json({ ok: true, task: publicTask(task) });
 });
 
@@ -803,6 +836,7 @@ app.put("/api/tasks/:id", requireAuth, (req, res) => {
   const wasPaused = task.status === "paused";
   const runDate = new Date(startAt.getFullYear(), startAt.getMonth(), startAt.getDate());
   const seatCandidates = normalizeSeatCandidates(body);
+  const fallback = normalizeFallbackConfig(body);
   if (task.timer) clearTimeout(task.timer);
   task.timer = null;
   task.name = normalizeTaskName(body.name, task.name || nextTaskName(user.username));
@@ -812,6 +846,7 @@ app.put("/api/tasks/:id", requireAuth, (req, res) => {
     startTime: body.startTime,
     seatNo: seatCandidates[0],
     seatCandidates,
+    ...fallback,
     roomId: body.roomId ? String(body.roomId) : "",
     mode: body.mode === "api" ? "api" : "browser",
     visibleBrowser: body.visibleBrowser !== false,
@@ -836,7 +871,7 @@ app.put("/api/tasks/:id", requireAuth, (req, res) => {
   addLog(
     task,
     "info",
-    `任务配置已修改；候选座位 ${seatCandidates.join("、")}；${wasPaused ? "当前保持暂停" : `下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 执行`}`,
+    `任务配置已修改；候选座位 ${seatCandidates.join("、")}；${fallback.fallbackEnabled ? `区间兜底 ${fallback.fallbackSeatStart} 至 ${fallback.fallbackSeatEnd}；` : "未开启区间兜底；"}${wasPaused ? "当前保持暂停" : `下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 执行`}`,
   );
   bus.emit("task", publicTask(task));
   res.json({ ok: true, task: publicTask(task) });

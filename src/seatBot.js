@@ -1,4 +1,6 @@
 import { chromium } from "@playwright/test";
+import { expandSeatRange } from "./seatRange.js";
+import { hasSeatReservationConflict } from "./seatAvailability.js";
 
 export const TARGET = {
   baseUrl: "https://tsgzw1.qdhhc.edu.cn",
@@ -61,6 +63,11 @@ function seatCandidates(form) {
       return true;
     })
     .slice(0, 3);
+}
+
+function fallbackSeatCandidates(form) {
+  if (form.fallbackEnabled !== true) return [];
+  return expandSeatRange(form.fallbackSeatStart, form.fallbackSeatEnd);
 }
 
 async function clickFirstVisible(page, selectors, options = {}) {
@@ -593,6 +600,46 @@ async function findSeatDevice(context, userInfo, form, segment, log, seatNo = fo
   throw new Error(`没有在座位图数据中找到座位 ${variants}。已检查：${checked.join("，") || "无"}${sampleText}`);
 }
 
+async function findFallbackSeatDevices(context, userInfo, form, segment, log, requestedSeats) {
+  const rooms = await getRoomCandidates(form, log);
+  const resvDate = segment.date.replace(/-/g, "");
+  const checked = [];
+
+  for (const room of rooms) {
+    const data = await apiGet(
+      context,
+      userInfo,
+      "reserve",
+      { roomIds: room.id, resvDates: resvDate, sysKind: 8 },
+      `读取 ${room.label} 兜底座位图`,
+    );
+    if (data?.code !== 0) {
+      if (form.roomId) throw new Error(data?.message || `读取 ${room.label} 座位图失败`);
+      checked.push(`${room.label}(读取失败)`);
+      continue;
+    }
+
+    const devices = collectSeatDevices(data.data);
+    checked.push(`${room.label}(${devices.length})`);
+    const seenDevices = new Set();
+    const matches = [];
+    for (const seatNo of requestedSeats) {
+      const device = devices.find((item) => seatMatchInfo(item, seatNo));
+      if (!device) continue;
+      const devId = String(device.devId ?? device.deviceId ?? "");
+      if (!devId || seenDevices.has(devId)) continue;
+      seenDevices.add(devId);
+      matches.push({ room, device, seatNo });
+    }
+    if (matches.length) {
+      log("info", `在 ${room.label} 匹配到 ${matches.length}/${requestedSeats.length} 个兜底座位`);
+      return matches;
+    }
+  }
+
+  throw new Error(`兜底区间未匹配到座位。已检查：${checked.join("，") || "无"}`);
+}
+
 async function checkDeviceTips(context, userInfo, device, segment) {
   const devId = device.devId ?? device.deviceId;
   const ruleId = device.resvRule?.ruleId ?? device.resvRuleId;
@@ -614,6 +661,55 @@ async function checkDeviceTips(context, userInfo, device, segment) {
   if (data?.code !== 0) throw new Error(data?.message || "座位当前不可预约");
 }
 
+async function reserveMatchedSeat(context, userInfo, form, segment, index, log, match, label) {
+  const { room, device, seatNo } = match;
+  await checkDeviceTips(context, userInfo, device, segment);
+
+  const accNo = officialAccNo(userInfo, form);
+  const devId = device.devId ?? device.deviceId;
+  if (!accNo) throw new Error("没有从登录会话中取得官网账号字段 accNo，无法提交预约");
+  if (!devId) throw new Error(`座位 ${seatLabel(device)} 缺少 devId，无法提交预约`);
+  if (accNo !== form.account) {
+    log("info", `使用官网账号字段 appAccNo=${accNo} 提交，绑定学号 ${form.account} 已校验通过`);
+  }
+
+  const payload = {
+    testName: form.testName || "",
+    appAccNo: accNo,
+    memberKind: 1,
+    resvDev: [devId],
+    resvMember: [accNo],
+    resvProperty: 0,
+    sysKind: 8,
+    resvBeginTime: formatDateTime(segment, "begin"),
+    resvEndTime: formatDateTime(segment, "end"),
+  };
+
+  const data = await apiPost(context, userInfo, "reserve", payload, `提交第 ${index + 1} 段预约`);
+  if (data?.code !== 0) {
+    const payloadSummary = {
+      appAccNo: payload.appAccNo,
+      resvMember: payload.resvMember,
+      resvDev: payload.resvDev,
+      sysKind: payload.sysKind,
+      resvBeginTime: payload.resvBeginTime,
+      resvEndTime: payload.resvEndTime,
+    };
+    throw new Error(`${data?.message || `第 ${index + 1} 段预约失败`}；提交摘要 ${JSON.stringify(payloadSummary)}`);
+  }
+
+  log("success", `第 ${index + 1} 段预约提交成功：${room.label} / ${seatLabel(device)}（${label} ${seatNo}）`);
+  return {
+    ok: true,
+    roomId: room.id,
+    requestedSeat: seatNo,
+    seat: seatLabel(device),
+    devId,
+    fallback: label === "区间兜底",
+    data,
+  };
+}
+
 async function submitOfficialReserve(context, page, form, segment, index, log) {
   log("info", `开始第 ${index + 1} 段：${formatDateTime(segment, "begin")} 至 ${formatDateTime(segment, "end")}`);
   log("info", "使用官网可视化座位图接口读取 devId，并通过官网预约接口提交");
@@ -630,57 +726,47 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
 
     try {
       const { room, device } = await findSeatDevice(context, userInfo, form, segment, log, seatNo);
-      await checkDeviceTips(context, userInfo, device, segment);
-
-      const accNo = officialAccNo(userInfo, form);
-      const devId = device.devId ?? device.deviceId;
-      if (!accNo) throw new Error("没有从登录会话中取得官网账号字段 accNo，无法提交预约");
-      if (!devId) throw new Error(`座位 ${seatLabel(device)} 缺少 devId，无法提交预约`);
-      if (accNo !== form.account) {
-        log("info", `使用官网账号字段 appAccNo=${accNo} 提交，绑定学号 ${form.account} 已校验通过`);
-      }
-
-      const payload = {
-        testName: form.testName || "",
-        appAccNo: accNo,
-        memberKind: 1,
-        resvDev: [devId],
-        resvMember: [accNo],
-        resvProperty: 0,
-        sysKind: 8,
-        resvBeginTime: formatDateTime(segment, "begin"),
-        resvEndTime: formatDateTime(segment, "end"),
-      };
-
-      const data = await apiPost(context, userInfo, "reserve", payload, `提交第 ${index + 1} 段预约`);
-      if (data?.code !== 0) {
-        const payloadSummary = {
-          appAccNo: payload.appAccNo,
-          resvMember: payload.resvMember,
-          resvDev: payload.resvDev,
-          sysKind: payload.sysKind,
-          resvBeginTime: payload.resvBeginTime,
-          resvEndTime: payload.resvEndTime,
-        };
-        throw new Error(`${data?.message || `第 ${index + 1} 段预约失败`}；提交摘要 ${JSON.stringify(payloadSummary)}`);
-      }
-
-      log("success", `第 ${index + 1} 段预约提交成功：${room.label} / ${seatLabel(device)}（${label} ${seatNo}）`);
-      return {
-        ok: true,
-        roomId: room.id,
-        requestedSeat: seatNo,
-        seat: seatLabel(device),
-        devId,
-        data,
-      };
+      return await reserveMatchedSeat(context, userInfo, form, segment, index, log, { room, device, seatNo }, label);
     } catch (error) {
       failures.push(`${seatNo}：${error.message}`);
       log("warn", `第 ${index + 1} 段${label} ${seatNo} 失败：${error.message}`);
     }
   }
 
-  throw new Error(`第 ${index + 1} 段所有候选座位均预约失败：${failures.join("；")}`);
+  if (form.fallbackEnabled !== true) {
+    throw new Error(`第 ${index + 1} 段所有候选座位均预约失败：${failures.join("；")}`);
+  }
+
+  const explicitKeys = new Set(candidates.map(normalizeText));
+  const rangeSeats = fallbackSeatCandidates(form).filter((seatNo) => !explicitKeys.has(normalizeText(seatNo)));
+  if (!rangeSeats.length) {
+    throw new Error(`第 ${index + 1} 段指定座位均失败，兜底区间没有额外可尝试座位`);
+  }
+  log("warn", `第 ${index + 1} 段指定座位均未成功，开始遍历兜底区间 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`);
+
+  const matches = await findFallbackSeatDevices(context, userInfo, form, segment, log, rangeSeats);
+  const availableMatches = matches.filter((match) => !hasSeatReservationConflict(match.device, segment));
+  const occupiedCount = matches.length - availableMatches.length;
+  log("info", `兜底座位图检查完成：匹配 ${matches.length} 个，目标时段明显占用 ${occupiedCount} 个，准备尝试 ${availableMatches.length} 个`);
+  if (!availableMatches.length) {
+    throw new Error(`第 ${index + 1} 段兜底区间内没有目标时段可尝试的空闲座位`);
+  }
+
+  const fallbackFailures = [];
+  for (let fallbackIndex = 0; fallbackIndex < availableMatches.length; fallbackIndex += 1) {
+    const match = availableMatches[fallbackIndex];
+    if (fallbackIndex === 0 || fallbackIndex % 10 === 0) {
+      log("info", `兜底预约进度 ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`);
+    }
+    try {
+      return await reserveMatchedSeat(context, userInfo, form, segment, index, log, match, "区间兜底");
+    } catch (error) {
+      fallbackFailures.push(`${match.seatNo}：${error.message}`);
+    }
+  }
+
+  const lastFailures = fallbackFailures.slice(-5).join("；");
+  throw new Error(`第 ${index + 1} 段兜底区间 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd} 的 ${availableMatches.length} 个可尝试座位均预约失败${lastFailures ? `；最后错误：${lastFailures}` : ""}`);
 }
 
 export async function runSeatTask(form, log) {
@@ -702,6 +788,9 @@ export async function runSeatTask(form, log) {
 
     const results = [];
     log("info", `候选座位顺序：${seatCandidates(form).join(" → ")}`);
+    if (form.fallbackEnabled === true) {
+      log("info", `区间兜底：${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}（指定座位全部失败后执行）`);
+    }
     for (let index = 0; index < form.segments.length; index += 1) {
       const segment = form.segments[index];
       results.push(await submitOfficialReserve(context, page, form, segment, index, log));

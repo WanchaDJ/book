@@ -19,6 +19,10 @@ const taskEditText = document.querySelector("#taskEditText");
 const cancelTaskEditButton = document.querySelector("#cancelTaskEdit");
 const taskSubmitButton = document.querySelector("#taskSubmitButton");
 const passwordLabel = document.querySelector("#passwordLabel");
+const fallbackEnabledInput = document.querySelector("#fallbackEnabled");
+const fallbackRangeFields = document.querySelector("#fallbackRangeFields");
+const fallbackSeatStartInput = document.querySelector("#fallbackSeatStart");
+const fallbackSeatEndInput = document.querySelector("#fallbackSeatEnd");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
@@ -133,6 +137,39 @@ function collectSeatCandidates() {
   return normalizeSeatList([form.seatNo.value, form.seatNoAlt1.value, form.seatNoAlt2.value]);
 }
 
+function validateFallbackRange() {
+  if (!fallbackEnabledInput.checked) return [];
+  const startText = fallbackSeatStartInput.value.trim();
+  const endText = fallbackSeatEndInput.value.trim();
+  if (!startText || !endText) return ["启用区间兜底后，请填写开始座位和结束座位"];
+
+  const parseEdge = (value) => {
+    const match = value.match(/^(.*?)(\d+)(\D*)$/);
+    if (!match) return null;
+    return { prefix: match[1], digits: match[2], number: Number(match[2]), suffix: match[3] };
+  };
+  const comparable = (value) => value.replace(/\s+/g, "").toUpperCase();
+  const start = parseEdge(startText);
+  const end = parseEdge(endText);
+  if (!start || !end || !Number.isSafeInteger(start.number) || !Number.isSafeInteger(end.number)) {
+    return ["兜底座位起止值必须包含有效数字编号"];
+  }
+  if (comparable(start.prefix) !== comparable(end.prefix) || comparable(start.suffix) !== comparable(end.suffix)) {
+    return ["兜底座位起止值必须使用相同前缀和后缀，例如 2F-001 至 2F-067"];
+  }
+  if (start.number > end.number) return ["兜底座位结束编号不能小于开始编号"];
+  if (end.number - start.number + 1 > 300) return ["兜底座位区间最多允许 300 个座位"];
+  return [];
+}
+
+function updateFallbackControls() {
+  const enabled = fallbackEnabledInput.checked;
+  const controlsEnabled = !fallbackEnabledInput.disabled;
+  fallbackRangeFields.classList.toggle("hidden", !enabled);
+  fallbackSeatStartInput.disabled = !controlsEnabled || !enabled;
+  fallbackSeatEndInput.disabled = !controlsEnabled || !enabled;
+}
+
 function resetTaskNameField() {
   form.taskName.value = "";
   taskNameTouched = false;
@@ -166,6 +203,7 @@ function resetTaskFormForCreate({ preservePassword = true } = {}) {
   lastDefaultSegmentDate = defaultSegmentDate();
   addSegment();
   updateScheduleControls();
+  updateFallbackControls();
   resetTaskNameField();
   setTaskEditorMode();
 }
@@ -199,6 +237,10 @@ function startTaskEdit(taskId) {
   form.seatNo.value = candidates[0] || "";
   form.seatNoAlt1.value = candidates[1] || "";
   form.seatNoAlt2.value = candidates[2] || "";
+  fallbackEnabledInput.checked = task.form.fallbackEnabled === true;
+  fallbackSeatStartInput.value = task.form.fallbackSeatStart || "";
+  fallbackSeatEndInput.value = task.form.fallbackSeatEnd || "";
+  updateFallbackControls();
   ensureRoomOption(task.form.roomId);
   form.roomId.value = task.form.roomId || "";
   const modeRadio = form.querySelector(`input[name="mode"][value="${task.form.mode || "browser"}"]`);
@@ -226,6 +268,7 @@ function setControlsEnabled(enabled) {
   document.querySelector("#addSegment").disabled = !enabled;
   document.querySelector("#refreshMenu").disabled = !enabled;
   document.querySelector("#previewSeat").disabled = !enabled;
+  updateFallbackControls();
 }
 
 function updateScheduleControls() {
@@ -347,6 +390,9 @@ function renderTasks() {
       const scheduledAt = new Date(task.scheduledAt).toLocaleString("zh-CN", { hour12: false });
       const last = task.runCount ? `；已执行 ${task.runCount} 次${task.lastRunOk === false ? "，上次失败" : ""}` : "";
       const seats = task.form.seatCandidates?.length ? task.form.seatCandidates.join(" → ") : task.form.seatNo;
+      const fallbackText = task.form.fallbackEnabled
+        ? `；兜底 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
+        : "";
       const paused = task.status === "paused";
       const running = task.status === "running";
       const nextText = paused ? "已暂停" : `下次执行 ${scheduledAt}`;
@@ -357,7 +403,7 @@ function renderTasks() {
             <span>${escapeHtml(task.name || task.id)} · ${statusText(task.status)}</span>
             <span>${escapeHtml(repeatText)} ${escapeHtml(task.form.startTime || "--:--")}</span>
           </header>
-          <p>${escapeHtml(nextText)}；账号 ${escapeHtml(task.form.account)}；候选座位 ${escapeHtml(seats)}；将预约 ${escapeHtml(segments)}${escapeHtml(last)}</p>
+          <p>${escapeHtml(nextText)}；账号 ${escapeHtml(task.form.account)}；候选座位 ${escapeHtml(seats)}${escapeHtml(fallbackText)}；将预约 ${escapeHtml(segments)}${escapeHtml(last)}</p>
           <div class="task-actions">
             <button class="secondary edit-task" ${running ? "disabled" : ""}>修改</button>
             <button class="secondary run-now" ${running || paused ? "disabled" : ""}>立即执行</button>
@@ -433,6 +479,7 @@ async function createTask(event) {
   const seatCandidates = collectSeatCandidates();
   const schedule = collectSchedule();
   const errors = validateSegments(segments);
+  errors.push(...validateFallbackRange());
   if (!seatCandidates.length) errors.push("请输入座位号");
   if (schedule.scheduleType === "weekly" && schedule.weekdays.length === 0) errors.push("请选择至少一个每周执行日期");
   if (errors.length) {
@@ -446,6 +493,9 @@ async function createTask(event) {
     weekdays: schedule.weekdays,
     seatNo: seatCandidates[0],
     seatCandidates,
+    fallbackEnabled: fallbackEnabledInput.checked,
+    fallbackSeatStart: fallbackSeatStartInput.value.trim(),
+    fallbackSeatEnd: fallbackSeatEndInput.value.trim(),
     roomId: form.roomId.value,
     mode: new FormData(form).get("mode"),
     visibleBrowser: document.querySelector("#visibleBrowser").checked,
@@ -489,6 +539,11 @@ async function previewSeat() {
   const button = document.querySelector("#previewSeat");
   const firstSegment = collectSegments()[0];
   const seatCandidates = collectSeatCandidates();
+  const fallbackErrors = validateFallbackRange();
+  if (fallbackErrors.length) {
+    fallbackErrors.forEach((message) => addLog({ level: "error", message }));
+    return;
+  }
   const payload = {
     password: form.password.value,
     seatNo: seatCandidates[0] || "",
@@ -504,7 +559,7 @@ async function previewSeat() {
   }
 
   button.disabled = true;
-  addLog({ level: "info", message: "开始检查座位匹配，不会提交预约" });
+  addLog({ level: "info", message: "开始检查指定座位的匹配，不会提交预约；兜底区间将在任务执行时读取" });
   try {
     const response = await fetch("/api/seat-preview", {
       method: "POST",
@@ -707,6 +762,7 @@ form.taskName.addEventListener("drop", markTaskNameTouched);
 for (const input of form.querySelectorAll('input[name="scheduleType"], input[name="weekdays"]')) {
   input.addEventListener("change", updateScheduleControls);
 }
+fallbackEnabledInput.addEventListener("change", updateFallbackControls);
 form.addEventListener("submit", createTask);
 loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);

@@ -110,6 +110,24 @@
             <input id="seatNoAlt2" name="seatNoAlt2" placeholder="备选 1 失败后尝试" />
           </div>
 
+          <div class="fallback-panel span-2">
+            <label class="checkline">
+              <input id="fallbackEnabled" name="fallbackEnabled" type="checkbox" />
+              <span>启用区间兜底</span>
+            </label>
+            <div class="fallback-range hidden" id="fallbackRangeFields">
+              <div class="field">
+                <label for="fallbackSeatStart">兜底开始座位</label>
+                <input id="fallbackSeatStart" name="fallbackSeatStart" maxlength="40" placeholder="例如 2F-001" />
+              </div>
+              <span class="fallback-range-separator">至</span>
+              <div class="field">
+                <label for="fallbackSeatEnd">兜底结束座位</label>
+                <input id="fallbackSeatEnd" name="fallbackSeatEnd" maxlength="40" placeholder="例如 2F-067" />
+              </div>
+            </div>
+          </div>
+
           <div class="field span-2">
             <label>执行方式</label>
             <div class="segmented" role="radiogroup" aria-label="执行方式">
