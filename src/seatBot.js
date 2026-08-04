@@ -5,6 +5,7 @@ import {
   normalizeFallbackMode,
   parseFallbackCustomSeats,
   remainingFallbackRangeSeats,
+  shuffleFallbackSeats,
 } from "./fallbackSeats.js";
 
 export const TARGET = {
@@ -762,11 +763,14 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
     ? parseFallbackCustomSeats(form.fallbackCustomSeats).seats.slice(0, MAX_CUSTOM_FALLBACK_SEATS)
     : [];
   const customSeatsToTry = customSeats.filter((seatNo) => !candidates.some((candidate) => normalizeText(candidate) === normalizeText(seatNo)));
-  const rangeSeats = remainingFallbackRangeSeats(
+  const remainingRangeSeats = remainingFallbackRangeSeats(
     form.fallbackSeatStart,
     form.fallbackSeatEnd,
     [...candidates, ...customSeats],
   );
+  const rangeSeats = fallbackMode === "range"
+    ? shuffleFallbackSeats(remainingRangeSeats)
+    : remainingRangeSeats;
   if (!rangeSeats.length && !customSeatsToTry.length) {
     throw new Error(`第 ${index + 1} 段指定座位均失败，兜底区间没有尚未尝试的座位`);
   }
@@ -774,7 +778,7 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
     "warn",
     fallbackMode === "custom"
       ? `第 ${index + 1} 段：指定座位均失败，开始超强自定义兜底（${customSeatsToTry.length} 个自定义座位）`
-      : `第 ${index + 1} 段：指定座位均失败，开始盲盒遍历 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`,
+      : `第 ${index + 1} 段：指定座位均失败，已随机打乱 ${rangeSeats.length} 个盲盒候选座位`,
     { logKey: progressKey },
   );
 
@@ -845,7 +849,7 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
     const match = availableMatches[fallbackIndex];
     log(
       "info",
-      `第 ${index + 1} 段：${fallbackMode === "custom" ? "最终区间" : "盲盒"}目前尝试到 ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`,
+      `第 ${index + 1} 段：${fallbackMode === "custom" ? "最终区间目前尝试到" : "盲盒已抽到"} ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`,
       { logKey: progressKey },
     );
     try {

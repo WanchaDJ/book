@@ -49,3 +49,12 @@ export function remainingFallbackRangeSeats(start, end, attemptedSeats = []) {
   const attemptedKeys = new Set(attemptedSeats.map(fallbackSeatKey));
   return expandSeatRange(start, end).filter((seat) => !attemptedKeys.has(fallbackSeatKey(seat)));
 }
+
+export function shuffleFallbackSeats(seats, random = Math.random) {
+  const shuffled = [...seats];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
+}

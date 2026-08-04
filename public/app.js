@@ -448,7 +448,7 @@ function renderTasks() {
       const fallbackText = task.form.fallbackEnabled
         ? task.form.fallbackMode === "custom"
           ? `；超强自定义 ${(task.form.fallbackCustomSeats || []).length} 个 → 遍历 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
-          : `；盲盒 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
+          : `；盲盒随机 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
         : "";
       const paused = task.status === "paused";
       const running = task.status === "running";

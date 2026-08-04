@@ -4,6 +4,7 @@ import {
   normalizeFallbackMode,
   parseFallbackCustomSeats,
   remainingFallbackRangeSeats,
+  shuffleFallbackSeats,
   validateFallbackCustomSeats,
 } from "../src/fallbackSeats.js";
 
@@ -38,4 +39,10 @@ test("final range excludes explicit and custom seats already attempted", () => {
 test("old fallback tasks default to blind-box range mode", () => {
   assert.equal(normalizeFallbackMode(undefined), "range");
   assert.equal(normalizeFallbackMode("custom"), "custom");
+});
+
+test("blind-box mode shuffles a copy of the fallback range", () => {
+  const seats = ["2F-001", "2F-002", "2F-003", "2F-004"];
+  assert.deepEqual(shuffleFallbackSeats(seats, () => 0), ["2F-002", "2F-003", "2F-004", "2F-001"]);
+  assert.deepEqual(seats, ["2F-001", "2F-002", "2F-003", "2F-004"]);
 });

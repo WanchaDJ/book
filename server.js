@@ -380,7 +380,7 @@ function fallbackDescription(form) {
     const customSeats = parseFallbackCustomSeats(form.fallbackCustomSeats).seats;
     return `超强自定义 ${customSeats.length} 个，最终遍历 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`;
   }
-  return `盲盒兜底 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`;
+  return `盲盒随机 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`;
 }
 
 function normalizeWeekdays(value) {
