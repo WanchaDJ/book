@@ -30,7 +30,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -500,13 +501,23 @@ h2 {
 }
 
 .seat-tag.fallback-seat {
+  height: auto;
+  min-width: 0;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  flex-wrap: wrap;
   border-color: #d5a534;
   color: #75520a;
   background: #fff7dc;
 }
 
 .seat-tag.fallback-seat strong {
+  overflow-wrap: anywhere;
   color: #5f4207;
+}
+
+.seat-tag.fallback-custom-seat {
+  max-width: 100%;
 }
 
 .muted-value {
@@ -569,7 +580,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -586,9 +598,16 @@ input[readonly] {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(20, 108, 95, 0.13);
+}
+
+textarea {
+  min-width: 0;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .segmented {
@@ -666,12 +685,48 @@ select:focus {
   background: #f3f6f1;
 }
 
+.fallback-config {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.fallback-mode {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fallback-custom {
+  min-width: 0;
+}
+
+.fallback-custom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.fallback-custom-head span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fallback-custom-head span.over-limit {
+  color: var(--danger);
+}
+
+#fallbackCustomSeats {
+  min-height: 150px;
+}
+
 .fallback-range {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 12px;
   align-items: end;
-  margin-top: 12px;
 }
 
 .fallback-range-separator {

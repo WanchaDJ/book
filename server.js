@@ -7,6 +7,12 @@ import { dirname, resolve } from "node:path";
 import { runSeatTask, previewSeatMatch, fetchSeatMenu, TARGET } from "./src/seatBot.js";
 import { authenticateUser, bindStudentId, createUser, deleteUser, getUser, listUsers } from "./src/authStore.js";
 import { expandSeatRange } from "./src/seatRange.js";
+import {
+  MAX_CUSTOM_FALLBACK_SEATS,
+  normalizeFallbackMode,
+  parseFallbackCustomSeats,
+  validateFallbackCustomSeats,
+} from "./src/fallbackSeats.js";
 import { upsertLogEntry } from "./src/taskLogs.js";
 
 const app = express();
@@ -187,6 +193,11 @@ function serializeTask(task) {
 function deserializeTask(savedTask) {
   const { form, ...rest } = savedTask;
   const { passwordSecret, ...restForm } = form;
+  const fallbackEnabled = restForm.fallbackEnabled === true;
+  const fallbackMode = normalizeFallbackMode(restForm.fallbackMode);
+  const fallbackCustomSeats = fallbackEnabled && fallbackMode === "custom"
+    ? parseFallbackCustomSeats(restForm.fallbackCustomSeats).seats.slice(0, MAX_CUSTOM_FALLBACK_SEATS)
+    : [];
   return {
     ...rest,
     status: savedTask.status === "paused" ? "paused" : "scheduled",
@@ -198,6 +209,9 @@ function deserializeTask(savedTask) {
       ...restForm,
       password: decryptTaskPassword(passwordSecret),
       schedule: restForm.schedule || { type: "daily", weekdays: [] },
+      fallbackEnabled,
+      fallbackMode,
+      fallbackCustomSeats,
     },
     logs: Array.isArray(savedTask.logs) ? savedTask.logs.slice(-300) : [],
     result: savedTask.result || null,
@@ -347,11 +361,26 @@ function normalizeSeatCandidates(body) {
 
 function normalizeFallbackConfig(body) {
   const enabled = body?.fallbackEnabled === true;
+  const mode = normalizeFallbackMode(body?.fallbackMode);
+  const customSeats = parseFallbackCustomSeats(body?.fallbackCustomSeats).seats;
   return {
     fallbackEnabled: enabled,
+    fallbackMode: enabled ? mode : "range",
+    fallbackCustomSeats: enabled && mode === "custom"
+      ? customSeats.slice(0, MAX_CUSTOM_FALLBACK_SEATS)
+      : [],
     fallbackSeatStart: enabled ? String(body?.fallbackSeatStart ?? "").trim() : "",
     fallbackSeatEnd: enabled ? String(body?.fallbackSeatEnd ?? "").trim() : "",
   };
+}
+
+function fallbackDescription(form) {
+  if (form?.fallbackEnabled !== true) return "";
+  if (normalizeFallbackMode(form.fallbackMode) === "custom") {
+    const customSeats = parseFallbackCustomSeats(form.fallbackCustomSeats).seats;
+    return `超强自定义 ${customSeats.length} 个，最终遍历 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`;
+  }
+  return `盲盒兜底 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`;
 }
 
 function normalizeWeekdays(value) {
@@ -429,13 +458,16 @@ function validatePayload(body) {
   if (!seatCandidates.length) errors.push("请输入座位号");
   if (fallback.fallbackEnabled) {
     if (!fallback.fallbackSeatStart || !fallback.fallbackSeatEnd) {
-      errors.push("启用区间兜底后，请填写开始座位和结束座位");
+      errors.push("启用兜底预约后，请填写遍历开始座位和结束座位");
     } else {
       try {
         expandSeatRange(fallback.fallbackSeatStart, fallback.fallbackSeatEnd);
       } catch (error) {
         errors.push(error.message);
       }
+    }
+    if (fallback.fallbackMode === "custom") {
+      errors.push(...validateFallbackCustomSeats(body?.fallbackCustomSeats).errors);
     }
   }
   if (!Array.isArray(body.segments) || body.segments.length === 0) errors.push("至少添加一个预约时间段");
@@ -485,6 +517,8 @@ function publicTask(task) {
       seatNo: task.form.seatNo,
       seatCandidates: task.form.seatCandidates,
       fallbackEnabled: task.form.fallbackEnabled === true,
+      fallbackMode: normalizeFallbackMode(task.form.fallbackMode),
+      fallbackCustomSeats: parseFallbackCustomSeats(task.form.fallbackCustomSeats).seats,
       fallbackSeatStart: task.form.fallbackSeatStart || "",
       fallbackSeatEnd: task.form.fallbackSeatEnd || "",
       roomId: task.form.roomId,
@@ -519,6 +553,8 @@ function adminTaskSummary(task) {
       seatNo: task.form?.seatNo || seatCandidates[0] || "",
       seatCandidates,
       fallbackEnabled: task.form?.fallbackEnabled === true,
+      fallbackMode: normalizeFallbackMode(task.form?.fallbackMode),
+      fallbackCustomSeats: parseFallbackCustomSeats(task.form?.fallbackCustomSeats).seats,
       fallbackSeatStart: task.form?.fallbackSeatStart || "",
       fallbackSeatEnd: task.form?.fallbackSeatEnd || "",
       roomId: task.form?.roomId || "",
@@ -541,9 +577,7 @@ async function executeTask(task, runAt = new Date()) {
     const runSeatCandidates = Array.isArray(runForm.seatCandidates) && runForm.seatCandidates.length
       ? runForm.seatCandidates
       : [runForm.seatNo].filter(Boolean);
-    const fallbackText = runForm.fallbackEnabled
-      ? `；兜底 ${runForm.fallbackSeatStart} 至 ${runForm.fallbackSeatEnd}`
-      : "";
+    const fallbackText = runForm.fallbackEnabled ? `；${fallbackDescription(runForm)}` : "";
     addLog(
       task,
       "info",
@@ -822,9 +856,7 @@ app.post("/api/tasks", requireAuth, (req, res) => {
 
   tasks.set(task.id, task);
   scheduleTask(task, startAt);
-  const fallbackText = form.fallbackEnabled
-    ? `；兜底 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`
-    : "";
+  const fallbackText = form.fallbackEnabled ? `；${fallbackDescription(form)}` : "";
   addLog(
     task,
     "info",
@@ -905,7 +937,7 @@ app.put("/api/tasks/:id", requireAuth, (req, res) => {
   addLog(
     task,
     "info",
-    `任务配置已修改；候选座位 ${seatCandidates.join("、")}；${fallback.fallbackEnabled ? `区间兜底 ${fallback.fallbackSeatStart} 至 ${fallback.fallbackSeatEnd}；` : "未开启区间兜底；"}${wasPaused ? "当前保持暂停" : `下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 执行`}`,
+    `任务配置已修改；候选座位 ${seatCandidates.join("、")}；${fallback.fallbackEnabled ? `${fallbackDescription(fallback)}；` : "未开启兜底预约；"}${wasPaused ? "当前保持暂停" : `下一次将在 ${startAt.toLocaleString("zh-CN", { hour12: false })} 执行`}`,
     { logKey: "configuration" },
   );
   bus.emit("task", publicTask(task));

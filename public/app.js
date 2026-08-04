@@ -23,6 +23,11 @@ const fallbackEnabledInput = document.querySelector("#fallbackEnabled");
 const fallbackRangeFields = document.querySelector("#fallbackRangeFields");
 const fallbackSeatStartInput = document.querySelector("#fallbackSeatStart");
 const fallbackSeatEndInput = document.querySelector("#fallbackSeatEnd");
+const fallbackModeRangeInput = document.querySelector("#fallbackModeRange");
+const fallbackModeCustomInput = document.querySelector("#fallbackModeCustom");
+const fallbackCustomFields = document.querySelector("#fallbackCustomFields");
+const fallbackCustomSeatsInput = document.querySelector("#fallbackCustomSeats");
+const fallbackCustomCount = document.querySelector("#fallbackCustomCount");
 
 let tasks = [];
 let lastDefaultSegmentDate = "";
@@ -137,11 +142,25 @@ function collectSeatCandidates() {
   return normalizeSeatList([form.seatNo.value, form.seatNoAlt1.value, form.seatNoAlt2.value]);
 }
 
+function collectFallbackCustomSeats() {
+  return fallbackCustomSeatsInput.value
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function currentFallbackMode() {
+  return fallbackModeCustomInput.checked ? "custom" : "range";
+}
+
 function validateFallbackRange() {
   if (!fallbackEnabledInput.checked) return [];
+  const errors = [];
   const startText = fallbackSeatStartInput.value.trim();
   const endText = fallbackSeatEndInput.value.trim();
-  if (!startText || !endText) return ["启用区间兜底后，请填写开始座位和结束座位"];
+  if (!startText || !endText) {
+    errors.push("启用兜底预约后，请填写遍历开始座位和结束座位");
+  }
 
   const parseEdge = (value) => {
     const match = value.match(/^(.*?)(\d+)(\D*)$/);
@@ -149,25 +168,50 @@ function validateFallbackRange() {
     return { prefix: match[1], digits: match[2], number: Number(match[2]), suffix: match[3] };
   };
   const comparable = (value) => value.replace(/\s+/g, "").toUpperCase();
-  const start = parseEdge(startText);
-  const end = parseEdge(endText);
-  if (!start || !end || !Number.isSafeInteger(start.number) || !Number.isSafeInteger(end.number)) {
-    return ["兜底座位起止值必须包含有效数字编号"];
+  if (startText && endText) {
+    const start = parseEdge(startText);
+    const end = parseEdge(endText);
+    if (!start || !end || !Number.isSafeInteger(start.number) || !Number.isSafeInteger(end.number)) {
+      errors.push("兜底座位起止值必须包含有效数字编号");
+    } else if (comparable(start.prefix) !== comparable(end.prefix) || comparable(start.suffix) !== comparable(end.suffix)) {
+      errors.push("兜底座位起止值必须使用相同前缀和后缀，例如 2F-001 至 2F-067");
+    } else if (start.number > end.number) {
+      errors.push("兜底座位结束编号不能小于开始编号");
+    } else if (end.number - start.number + 1 > 300) {
+      errors.push("兜底座位区间最多允许 300 个座位");
+    }
   }
-  if (comparable(start.prefix) !== comparable(end.prefix) || comparable(start.suffix) !== comparable(end.suffix)) {
-    return ["兜底座位起止值必须使用相同前缀和后缀，例如 2F-001 至 2F-067"];
+
+  if (currentFallbackMode() === "custom") {
+    const seats = collectFallbackCustomSeats();
+    if (!seats.length) errors.push("超强自定义模式至少需要填写一个座位");
+    if (seats.length > 20) errors.push("超强自定义座位最多允许 20 个");
+    const seen = new Set();
+    const duplicates = [];
+    for (const seat of seats) {
+      const key = seat.replace(/\s+/g, "").toUpperCase();
+      if (seen.has(key)) duplicates.push(seat);
+      seen.add(key);
+    }
+    if (duplicates.length) errors.push(`超强自定义座位不能重复：${[...new Set(duplicates)].join("、")}`);
   }
-  if (start.number > end.number) return ["兜底座位结束编号不能小于开始编号"];
-  if (end.number - start.number + 1 > 300) return ["兜底座位区间最多允许 300 个座位"];
-  return [];
+  return errors;
 }
 
 function updateFallbackControls() {
   const enabled = fallbackEnabledInput.checked;
   const controlsEnabled = !fallbackEnabledInput.disabled;
+  const customMode = currentFallbackMode();
   fallbackRangeFields.classList.toggle("hidden", !enabled);
+  fallbackCustomFields.classList.toggle("hidden", !enabled || customMode !== "custom");
+  fallbackModeRangeInput.disabled = !controlsEnabled || !enabled;
+  fallbackModeCustomInput.disabled = !controlsEnabled || !enabled;
+  fallbackCustomSeatsInput.disabled = !controlsEnabled || !enabled || customMode !== "custom";
   fallbackSeatStartInput.disabled = !controlsEnabled || !enabled;
   fallbackSeatEndInput.disabled = !controlsEnabled || !enabled;
+  const customSeatCount = collectFallbackCustomSeats().length;
+  fallbackCustomCount.textContent = `${customSeatCount}/20`;
+  fallbackCustomCount.classList.toggle("over-limit", customSeatCount > 20);
 }
 
 function resetTaskNameField() {
@@ -238,6 +282,10 @@ function startTaskEdit(taskId) {
   form.seatNoAlt1.value = candidates[1] || "";
   form.seatNoAlt2.value = candidates[2] || "";
   fallbackEnabledInput.checked = task.form.fallbackEnabled === true;
+  const fallbackMode = task.form.fallbackMode === "custom" ? "custom" : "range";
+  fallbackModeCustomInput.checked = fallbackMode === "custom";
+  fallbackModeRangeInput.checked = fallbackMode !== "custom";
+  fallbackCustomSeatsInput.value = (task.form.fallbackCustomSeats || []).join("\n");
   fallbackSeatStartInput.value = task.form.fallbackSeatStart || "";
   fallbackSeatEndInput.value = task.form.fallbackSeatEnd || "";
   updateFallbackControls();
@@ -398,7 +446,9 @@ function renderTasks() {
       const last = task.runCount ? `；已执行 ${task.runCount} 次${task.lastRunOk === false ? "，上次失败" : ""}` : "";
       const seats = task.form.seatCandidates?.length ? task.form.seatCandidates.join(" → ") : task.form.seatNo;
       const fallbackText = task.form.fallbackEnabled
-        ? `；兜底 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
+        ? task.form.fallbackMode === "custom"
+          ? `；超强自定义 ${(task.form.fallbackCustomSeats || []).length} 个 → 遍历 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
+          : `；盲盒 ${task.form.fallbackSeatStart || "-"} 至 ${task.form.fallbackSeatEnd || "-"}`
         : "";
       const paused = task.status === "paused";
       const running = task.status === "running";
@@ -501,6 +551,8 @@ async function createTask(event) {
     seatNo: seatCandidates[0],
     seatCandidates,
     fallbackEnabled: fallbackEnabledInput.checked,
+    fallbackMode: currentFallbackMode(),
+    fallbackCustomSeats: collectFallbackCustomSeats(),
     fallbackSeatStart: fallbackSeatStartInput.value.trim(),
     fallbackSeatEnd: fallbackSeatEndInput.value.trim(),
     roomId: form.roomId.value,
@@ -566,7 +618,7 @@ async function previewSeat() {
   }
 
   button.disabled = true;
-  addLog({ level: "info", message: "开始检查指定座位的匹配，不会提交预约；兜底区间将在任务执行时读取" });
+  addLog({ level: "info", message: "开始检查指定座位的匹配，不会提交预约；兜底座位将在任务执行时读取" });
   try {
     const response = await fetch("/api/seat-preview", {
       method: "POST",
@@ -775,6 +827,9 @@ for (const input of form.querySelectorAll('input[name="scheduleType"], input[nam
   input.addEventListener("change", updateScheduleControls);
 }
 fallbackEnabledInput.addEventListener("change", updateFallbackControls);
+fallbackModeRangeInput.addEventListener("change", updateFallbackControls);
+fallbackModeCustomInput.addEventListener("change", updateFallbackControls);
+fallbackCustomSeatsInput.addEventListener("input", updateFallbackControls);
 form.addEventListener("submit", createTask);
 loginForm.addEventListener("submit", login);
 bindForm.addEventListener("submit", bindStudent);

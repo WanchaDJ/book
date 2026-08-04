@@ -136,9 +136,13 @@ function renderSeatCandidates(task) {
       </span>`,
     )
     .join("");
-  const fallbackTag = task.form.fallbackEnabled
-    ? `<span class="seat-tag fallback-seat">兜底 <strong>${escapeHtml(task.form.fallbackSeatStart || "-")} 至 ${escapeHtml(task.form.fallbackSeatEnd || "-")}</strong></span>`
-    : "";
+  const customSeats = task.form.fallbackCustomSeats || [];
+  const fallbackTag = !task.form.fallbackEnabled
+    ? ""
+    : task.form.fallbackMode === "custom"
+      ? `<span class="seat-tag fallback-seat fallback-custom-seat">超强自定义 <strong>${escapeHtml(customSeats.join(" → ") || "-")}</strong></span>
+        <span class="seat-tag fallback-seat">最终遍历 <strong>${escapeHtml(task.form.fallbackSeatStart || "-")} 至 ${escapeHtml(task.form.fallbackSeatEnd || "-")}</strong></span>`
+      : `<span class="seat-tag fallback-seat">盲盒预约 <strong>${escapeHtml(task.form.fallbackSeatStart || "-")} 至 ${escapeHtml(task.form.fallbackSeatEnd || "-")}</strong></span>`;
   return candidateTags || fallbackTag ? `${candidateTags}${fallbackTag}` : `<span class="muted-value">未填写座位</span>`;
 }
 

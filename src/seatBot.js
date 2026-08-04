@@ -1,6 +1,11 @@
 import { chromium } from "@playwright/test";
-import { expandSeatRange } from "./seatRange.js";
 import { hasSeatReservationConflict } from "./seatAvailability.js";
+import {
+  MAX_CUSTOM_FALLBACK_SEATS,
+  normalizeFallbackMode,
+  parseFallbackCustomSeats,
+  remainingFallbackRangeSeats,
+} from "./fallbackSeats.js";
 
 export const TARGET = {
   baseUrl: "https://tsgzw1.qdhhc.edu.cn",
@@ -63,11 +68,6 @@ function seatCandidates(form) {
       return true;
     })
     .slice(0, 3);
-}
-
-function fallbackSeatCandidates(form) {
-  if (form.fallbackEnabled !== true) return [];
-  return expandSeatRange(form.fallbackSeatStart, form.fallbackSeatEnd);
 }
 
 async function clickFirstVisible(page, selectors, options = {}) {
@@ -597,7 +597,7 @@ async function findSeatDevice(context, userInfo, form, segment, log, seatNo = fo
   throw new Error(`没有在座位图数据中找到座位 ${variants}。已检查：${checked.join("，") || "无"}${sampleText}`);
 }
 
-async function findFallbackSeatDevices(context, userInfo, form, segment, log, requestedSeats) {
+async function loadFallbackSeatInventory(context, userInfo, form, segment, log, requestedSeats) {
   const rooms = await getRoomCandidates(form, log);
   const resvDate = segment.date.replace(/-/g, "");
   const checked = [];
@@ -618,22 +618,26 @@ async function findFallbackSeatDevices(context, userInfo, form, segment, log, re
 
     const devices = collectSeatDevices(data.data);
     checked.push(`${room.label}(${devices.length})`);
-    const seenDevices = new Set();
-    const matches = [];
-    for (const seatNo of requestedSeats) {
-      const device = devices.find((item) => seatMatchInfo(item, seatNo));
-      if (!device) continue;
-      const devId = String(device.devId ?? device.deviceId ?? "");
-      if (!devId || seenDevices.has(devId)) continue;
-      seenDevices.add(devId);
-      matches.push({ room, device, seatNo });
-    }
-    if (matches.length) {
-      return matches;
+    if (requestedSeats.some((seatNo) => devices.some((device) => seatMatchInfo(device, seatNo)))) {
+      return { room, devices };
     }
   }
 
-  throw new Error(`兜底区间未匹配到座位。已检查：${checked.join("，") || "无"}`);
+  throw new Error(`兜底座位未在座位图中匹配成功。已检查：${checked.join("，") || "无"}`);
+}
+
+function matchFallbackSeatDevices(inventory, requestedSeats) {
+  const seenDevices = new Set();
+  const matches = [];
+  for (const seatNo of requestedSeats) {
+    const device = inventory.devices.find((item) => seatMatchInfo(item, seatNo));
+    if (!device) continue;
+    const devId = String(device.devId ?? device.deviceId ?? "");
+    if (!devId || seenDevices.has(devId)) continue;
+    seenDevices.add(devId);
+    matches.push({ room: inventory.room, device, seatNo });
+  }
+  return matches;
 }
 
 async function checkDeviceTips(context, userInfo, device, segment) {
@@ -702,7 +706,7 @@ async function reserveMatchedSeat(context, userInfo, form, segment, index, log, 
     requestedSeat: seatNo,
     seat: seatLabel(device),
     devId,
-    fallback: label === "区间兜底",
+    fallback: label === "盲盒兜底" || label === "超强自定义",
     data,
   };
 }
@@ -753,35 +757,95 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
     );
   }
 
-  const explicitKeys = new Set(candidates.map(normalizeText));
-  const rangeSeats = fallbackSeatCandidates(form).filter((seatNo) => !explicitKeys.has(normalizeText(seatNo)));
-  if (!rangeSeats.length) {
-    throw new Error(`第 ${index + 1} 段指定座位均失败，兜底区间没有额外可尝试座位`);
+  const fallbackMode = normalizeFallbackMode(form.fallbackMode);
+  const customSeats = fallbackMode === "custom"
+    ? parseFallbackCustomSeats(form.fallbackCustomSeats).seats.slice(0, MAX_CUSTOM_FALLBACK_SEATS)
+    : [];
+  const customSeatsToTry = customSeats.filter((seatNo) => !candidates.some((candidate) => normalizeText(candidate) === normalizeText(seatNo)));
+  const rangeSeats = remainingFallbackRangeSeats(
+    form.fallbackSeatStart,
+    form.fallbackSeatEnd,
+    [...candidates, ...customSeats],
+  );
+  if (!rangeSeats.length && !customSeatsToTry.length) {
+    throw new Error(`第 ${index + 1} 段指定座位均失败，兜底区间没有尚未尝试的座位`);
   }
   log(
     "warn",
-    `第 ${index + 1} 段：指定座位均失败，正在读取兜底区间 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`,
+    fallbackMode === "custom"
+      ? `第 ${index + 1} 段：指定座位均失败，开始超强自定义兜底（${customSeatsToTry.length} 个自定义座位）`
+      : `第 ${index + 1} 段：指定座位均失败，开始盲盒遍历 ${form.fallbackSeatStart} 至 ${form.fallbackSeatEnd}`,
     { logKey: progressKey },
   );
 
-  const matches = await findFallbackSeatDevices(context, userInfo, form, segment, log, rangeSeats);
+  const inventory = await loadFallbackSeatInventory(
+    context,
+    userInfo,
+    form,
+    segment,
+    log,
+    [...customSeatsToTry, ...rangeSeats],
+  );
+  const fallbackFailures = [];
+
+  if (fallbackMode === "custom" && customSeatsToTry.length) {
+    const customMatches = matchFallbackSeatDevices(inventory, customSeatsToTry);
+    const availableCustomMatches = customMatches.filter((match) => !hasSeatReservationConflict(match.device, segment));
+    log(
+      "info",
+      `第 ${index + 1} 段：超强自定义匹配 ${customMatches.length}/${customSeatsToTry.length}，可尝试 ${availableCustomMatches.length} 个`,
+      { logKey: progressKey },
+    );
+    for (let customIndex = 0; customIndex < availableCustomMatches.length; customIndex += 1) {
+      const match = availableCustomMatches[customIndex];
+      log(
+        "info",
+        `第 ${index + 1} 段：超强自定义目前尝试到 ${customIndex + 1}/${availableCustomMatches.length}，当前座位 ${match.seatNo}`,
+        { logKey: progressKey },
+      );
+      try {
+        return await reserveMatchedSeat(
+          context,
+          userInfo,
+          form,
+          segment,
+          index,
+          log,
+          match,
+          "超强自定义",
+          progressKey,
+        );
+      } catch (error) {
+        fallbackFailures.push(`${match.seatNo}：${conciseErrorMessage(error)}`);
+      }
+    }
+  }
+
+  if (!rangeSeats.length) {
+    const lastFailure = fallbackFailures.at(-1) || "自定义座位均不可用";
+    throw new Error(`第 ${index + 1} 段兜底失败：区间内没有尚未尝试的座位；最后结果：${lastFailure}`);
+  }
+
+  const matches = matchFallbackSeatDevices(inventory, rangeSeats);
   const availableMatches = matches.filter((match) => !hasSeatReservationConflict(match.device, segment));
   const occupiedCount = matches.length - availableMatches.length;
   log(
     "info",
-    `第 ${index + 1} 段：兜底匹配 ${matches.length} 个座位，排除占用 ${occupiedCount} 个，准备尝试 ${availableMatches.length} 个`,
+    `第 ${index + 1} 段：${fallbackMode === "custom" ? "最终区间" : "盲盒"}匹配 ${matches.length} 个座位，排除占用 ${occupiedCount} 个，准备尝试 ${availableMatches.length} 个`,
     { logKey: progressKey },
   );
   if (!availableMatches.length) {
-    throw new Error(`第 ${index + 1} 段兜底区间内没有目标时段可尝试的空闲座位`);
+    const lastFailure = fallbackFailures.at(-1);
+    throw new Error(
+      `第 ${index + 1} 段兜底失败：区间内没有尚未尝试的空闲座位${lastFailure ? `；自定义座位最后结果：${lastFailure}` : ""}`,
+    );
   }
 
-  const fallbackFailures = [];
   for (let fallbackIndex = 0; fallbackIndex < availableMatches.length; fallbackIndex += 1) {
     const match = availableMatches[fallbackIndex];
     log(
       "info",
-      `第 ${index + 1} 段：兜底目前尝试到 ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`,
+      `第 ${index + 1} 段：${fallbackMode === "custom" ? "最终区间" : "盲盒"}目前尝试到 ${fallbackIndex + 1}/${availableMatches.length}，当前座位 ${match.seatNo}`,
       { logKey: progressKey },
     );
     try {
@@ -793,7 +857,7 @@ async function submitOfficialReserve(context, page, form, segment, index, log) {
         index,
         log,
         match,
-        "区间兜底",
+        "盲盒兜底",
         progressKey,
       );
     } catch (error) {

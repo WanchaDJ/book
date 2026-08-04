@@ -113,17 +113,35 @@
           <div class="fallback-panel span-2">
             <label class="checkline">
               <input id="fallbackEnabled" name="fallbackEnabled" type="checkbox" />
-              <span>启用区间兜底</span>
+              <span>启用兜底预约</span>
             </label>
-            <div class="fallback-range hidden" id="fallbackRangeFields">
+            <div class="fallback-config hidden" id="fallbackRangeFields">
               <div class="field">
-                <label for="fallbackSeatStart">兜底开始座位</label>
-                <input id="fallbackSeatStart" name="fallbackSeatStart" maxlength="40" placeholder="例如 2F-001" />
+                <label>兜底模式</label>
+                <div class="segmented fallback-mode" role="radiogroup" aria-label="兜底模式">
+                  <label><input id="fallbackModeRange" type="radio" name="fallbackMode" value="range" checked /> 盲盒预约</label>
+                  <label><input id="fallbackModeCustom" type="radio" name="fallbackMode" value="custom" /> 超强自定义</label>
+                </div>
               </div>
-              <span class="fallback-range-separator">至</span>
-              <div class="field">
-                <label for="fallbackSeatEnd">兜底结束座位</label>
-                <input id="fallbackSeatEnd" name="fallbackSeatEnd" maxlength="40" placeholder="例如 2F-067" />
+
+              <div class="fallback-custom hidden" id="fallbackCustomFields">
+                <div class="fallback-custom-head">
+                  <label for="fallbackCustomSeats">自定义座位（每行一个）</label>
+                  <span id="fallbackCustomCount">0/20</span>
+                </div>
+                <textarea id="fallbackCustomSeats" name="fallbackCustomSeats" rows="6" placeholder="例如：&#10;2F-015&#10;2F-028&#10;2F-036"></textarea>
+              </div>
+
+              <div class="fallback-range">
+                <div class="field">
+                  <label for="fallbackSeatStart">遍历开始座位</label>
+                  <input id="fallbackSeatStart" name="fallbackSeatStart" maxlength="40" placeholder="例如 2F-001" />
+                </div>
+                <span class="fallback-range-separator">至</span>
+                <div class="field">
+                  <label for="fallbackSeatEnd">遍历结束座位</label>
+                  <input id="fallbackSeatEnd" name="fallbackSeatEnd" maxlength="40" placeholder="例如 2F-067" />
+                </div>
               </div>
             </div>
           </div>
